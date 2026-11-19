@@ -1,0 +1,57 @@
+.{
+    .name = .tuft,
+    .version = "0.0.0",
+    .minimum_zig_version = "0.18.0-dev.1005+75d48dfff",
+    .fingerprint = 0xf3ec3b68ca38da0c,
+    .paths = .{
+        "src",
+        "tests",
+        "build.zig",
+        "build.zig.zon",
+        "LICENSE",
+        "README.md",
+        "THIRD_PARTY_NOTICES.md",
+    },
+    .dependencies = .{
+        .salamander = .{
+            .url = "git+https://github.com/ratatoskr/salamander#95a8169b210e9ced5760f197aaa7fa58307f2c90",
+            .hash = "salamander-0.0.1-6ZeDNo_5DADMfDi3L_QB2cutsWXbkWXbLL5NDgwPSDDi",
+        },
+        .translate_c = .{
+            .url = "git+https://codeberg.org/ziglang/translate-c#f200bb1d0ea9228061d79cde53f46c045cd5c772",
+            .hash = "translate_c-0.1.0-dev-Q_BUWrZkBwDAivD2kWX9knhl453C0LZBZi8gP2X-gCHB",
+        },
+        .vulkan_headers = .{
+            .url = "git+https://github.com/KhronosGroup/Vulkan-Headers?ref=v1.4.368#88487f687f3100ebe1d3559a8a34d971ee85b977",
+            .hash = "N-V-__8AAGrcigJk__pPsEdMgID-QhKWYAi-MHHn3sn5HOI6",
+        },
+        .imgui = .{
+            .url = "git+https://github.com/ocornut/imgui?ref=v1.93.0-docking#b916186e66aa3c02b72c6ca17455516512ed8049",
+            .hash = "N-V-__8AAIcIiQBQX2RxQFLvaMZafdWRY_FqA7kql4vDWKb0",
+        },
+        .dear_bindings = .{
+            .url = "https://github.com/dearimgui/dear_bindings/releases/download/DearBindings_v0.28_ImGui_v1.93.0-docking/DearBindings_v0.28_ImGui_v1.93.0-docking.zip",
+            .hash = "N-V-__8AAP9jgASvx_ddsXQayWyyzjooPhEHdMrxN7zhADxi",
+        },
+        .imguizmo = .{
+            .url = "git+https://github.com/cedricguillemet/imguizmo#105e4fde45e4e74aae8973d98750820ef7aca7e2",
+            .hash = "N-V-__8AALUZeADQ5El3nUvF-izKYeoNP6IiIDAfTyAJ2BEq",
+        },
+        .implot = .{
+            .url = "git+https://github.com/epezent/implot?ref=v1.1#819f200639455a58b6b3d4156b70e4271aeb2d00",
+            .hash = "N-V-__8AAM7SCwBraZZuI4r-uBQWHb7inlyd4EAcg9fGsRDj",
+        },
+        .zydis = .{
+            .url = "git+https://github.com/zyantific/zydis#4b31c345c9ada8c34d0a7a1d789c0f08f844d851",
+            .hash = "N-V-__8AADUpVAGnd9x66QxQ1KD6G2_4XHJGWydNbqOmzttk",
+        },
+        .zycore = .{
+            .url = "git+https://github.com/zyantific/zycore-c#c1fa01cea7fd457dcec468104d477c8b0ca675f7",
+            .hash = "N-V-__8AAKTLBwDJqBaCpfJE7euS8iny9atzzOG_8eyyObPP",
+        },
+        .stb = .{
+            .url = "git+https://github.com/nothings/stb#9600522de53973336fa033a289858a4354cbb04c",
+            .hash = "N-V-__8AAKFQVQC4NjbzesYbaBSKdGJUM7BCrXWCSbndWXMK",
+        },
+    },
+}

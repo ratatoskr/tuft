@@ -1,0 +1,9 @@
+; Windows' dinput8.dll exports (x64, from Windows 11 build 26300), with their ordinals.
+; Ordinal-only exports get a made-up name (tuft_proxy_ordinal_N) that isn't exported.
+EXPORTS
+    DirectInput8Create @1
+    DllCanUnloadNow @2
+    DllGetClassObject @3
+    DllRegisterServer @4
+    DllUnregisterServer @5
+    GetdfDIJoystick @6

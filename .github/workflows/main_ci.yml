@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.head_ref || github.run_id }}-${{ github.actor }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: check format
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v7
+
+      - name: install zig
+        uses: mlugg/setup-zig@v2
+
+      - name: check format
+        run: zig fmt --check .
+
+  test:
+    name: test | ${{ matrix.platform.target }}-${{ matrix.optimize }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - os: windows-latest
+            target: x86_64-windows-gnu
+          - os: windows-latest
+            target: x86-windows-gnu
+          - os: windows-latest
+            target: x86_64-windows-msvc
+          - os: windows-latest
+            target: x86-windows-msvc
+        optimize: [Debug, ReleaseFast]
+    runs-on: ${{ matrix.platform.os }}
+    timeout-minutes: 60
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v7
+
+      - name: install zig
+        uses: mlugg/setup-zig@v2
+        with:
+          # One cache per matrix entry, started fresh when build.zig.zon changes. If one ever goes
+          # stale, `gh cache delete --all` clears them. Releases build without it.
+          cache-key: ${{ matrix.platform.target }}-${{ matrix.optimize }}-${{ hashFiles('build.zig.zon') }}
+          cache-size-limit: 1024
+
+      - name: run tests
+        run: zig build test -Doptimize=${{ matrix.optimize }} -Dtarget=${{ matrix.platform.target }} --test-timeout 3m --summary all

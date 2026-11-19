@@ -1,0 +1,74 @@
+name: release
+
+# Run it by hand from the Actions tab with the version to release (like 0.0.2, no "v"). It sets
+# build.zig.zon's version, runs the tests, commits and tags `v<version>`. Only the tag is pushed, so
+# main stays at 0.0.0. Nothing is published. Wraith builds tuft from source.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, like 0.0.2 or 0.1.0-alpha.1 (no "v")
+        required: true
+        type: string
+
+# Pushes the release tag
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release
+    runs-on: windows-latest
+    timeout-minutes: 30
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v7
+
+      - name: check the version
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::$VERSION isn't a version like 1.2.3 or 1.2.3-alpha.1"
+            exit 1
+          fi
+          if [ "$VERSION" = 0.0.0 ]; then
+            echo "::error::0.0.0 is main's version, not a release"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" > /dev/null; then
+            echo "::error::v$VERSION is already tagged"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: set the version
+        shell: bash
+        run: |
+          sed -i -E "s/^(    \.version = )\"[^\"]*\"/\1\"$VERSION\"/" build.zig.zon
+          grep -q "^    \.version = \"$VERSION\"," build.zig.zon || { echo "::error::Couldn't set build.zig.zon's version"; exit 1; }
+
+      - name: install zig
+        uses: mlugg/setup-zig@v2
+        with:
+          # Releases build from scratch, so nothing stale from a cache gets in
+          use-cache: false
+
+      - name: test
+        run: zig build test -Doptimize=ReleaseFast -Dtarget=x86_64-windows-msvc --test-timeout 3m --summary all
+
+      - name: commit and tag
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "release v$VERSION"
+          git tag -a "v$VERSION" -m "v$VERSION"
+          git push origin "v$VERSION"

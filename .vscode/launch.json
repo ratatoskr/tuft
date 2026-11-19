@@ -1,0 +1,45 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "tuft tests",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\zig-out\\bin\\${input:testSuite}.exe",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "environment": [],
+      "preLaunchTask": "build tests"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "testSuite",
+      "type": "pickString",
+      "description": "Test suite to debug",
+      "default": "tuft_sys_tests",
+      "options": [
+        "tuft_arch_tests",
+        "tuft_arch_exec_tests",
+        "tuft_asm_tests",
+        "tuft_devtools_tests",
+        "tuft_event_tests",
+        "tuft_gfx_tests",
+        "tuft_hook_tests",
+        "tuft_imgui_tests",
+        "tuft_inject_tests",
+        "tuft_inject_e2e_tests",
+        "tuft_input_tests",
+        "tuft_schema_tests",
+        "tuft_mem_tests",
+        "tuft_proxy_tests",
+        "tuft_sys_tests",
+        "tuft_ui_tests",
+        "tuft_ui_frames_tests",
+        "tuft_vulkan_layout_tests",
+        "tuft_window_tests"
+      ]
+    }
+  ]
+}
