@@ -2,7 +2,7 @@ name: release
 
 # Run it by hand from the Actions tab with the version to release (like 0.0.2, no "v"). It sets
 # build.zig.zon's version, runs the tests, commits and tags `v<version>`. Only the tag is pushed, so
-# main stays at 0.0.0. Nothing is published. Wraith builds tuft from source.
+# main stays at 0.0.0. Nothing is published. Wraith pins tuft by commit in its build.zig.zon.
 
 on:
   workflow_dispatch:
