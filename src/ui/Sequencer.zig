@@ -116,10 +116,10 @@ fn interface(comptime T: type) c.ImSequencer_Interface {
         fn itemTypeCount(user: ?*anyopaque) callconv(.c) c_int {
             return @intCast(self(user).itemTypeCount());
         }
-        fn itemTypeName(user: ?*anyopaque, i: c_int) callconv(.c) [*c]const c_char {
+        fn itemTypeName(user: ?*anyopaque, i: c_int) callconv(.c) [*c]const u8 {
             return @ptrCast(self(user).itemTypeName(index(i)).ptr);
         }
-        fn itemLabel(user: ?*anyopaque, i: c_int) callconv(.c) [*c]const c_char {
+        fn itemLabel(user: ?*anyopaque, i: c_int) callconv(.c) [*c]const u8 {
             return @ptrCast(self(user).itemLabel(index(i)).ptr);
         }
         fn add(user: ?*anyopaque, kind: c_int) callconv(.c) void {

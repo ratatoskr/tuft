@@ -464,7 +464,7 @@ const State = struct {
         if (!isNull(pipeline)) self.fns.vkCmdBindPipeline(render_state.CommandBuffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     }
 
-    fn loadFunction(c_name: [*c]const c_char, user: ?*anyopaque) callconv(.c) c.PFN_vkVoidFunction {
+    fn loadFunction(c_name: [*c]const u8, user: ?*anyopaque) callconv(.c) c.PFN_vkVoidFunction {
         const self: *State = @ptrCast(@alignCast(user.?));
         const name: [*:0]const u8 = @ptrCast(c_name);
         const F = Pfn(c.PFN_vkVoidFunction);

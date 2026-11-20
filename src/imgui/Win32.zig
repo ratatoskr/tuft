@@ -765,7 +765,7 @@ fn getWindowMinimized(viewport: ?*c.ImGuiViewport) callconv(.c) bool {
     return win.IsIconic(hwnd).toBool();
 }
 
-fn setWindowTitle(viewport: ?*c.ImGuiViewport, title: [*c]const c_char) callconv(.c) void {
+fn setWindowTitle(viewport: ?*c.ImGuiViewport, title: [*c]const u8) callconv(.c) void {
     const data = viewportData(viewport) orelse return;
     if (title == null) return;
     const utf8 = std.mem.span(@as([*:0]const u8, @ptrCast(title)));

@@ -169,6 +169,6 @@ fn onViewportInput(ctx: *anyopaque, input: Win32.Input) void {
 
 pub const WM_MOUSEWHEEL: u32 = 0x020A;
 
-pub fn str(comptime s: [:0]const u8) [*c]const c_char {
+pub fn str(comptime s: [:0]const u8) [*c]const u8 {
     return @ptrCast(s.ptr);
 }

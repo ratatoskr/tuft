@@ -13,7 +13,6 @@ tuft includes code from these projects. Thanks to everyone who works on them.
 | [Zycore](https://github.com/zyantific/zycore-c) | MIT | support library for Zydis |
 | [Zig](https://ziglang.org) | MIT | its standard library is compiled into every binary |
 | [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers) | Apache-2.0 OR MIT (used under MIT) | only used by tests, not shipped |
-| [translate-c](https://codeberg.org/ziglang/translate-c) | MIT | Zig bindings for the C libraries, with its helpers compiled in |
 | [Salamander](https://github.com/ratatoskr/salamander) | MIT | runtime calls, trait objects and owners under the hooks and events, and `.sal` schemas for game types |
 
 ## Dear ImGui

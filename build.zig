@@ -1,6 +1,5 @@
 const std = @import("std");
 
-const Translator = @import("translate_c").Translator;
 const Import = std.Build.Module.Import;
 
 /// Links the `.def` for a proxy DLL into `lib` so exports keep Windows' ordinals.
@@ -17,11 +16,10 @@ pub fn build(b: *std.Build) void {
 
     if (!supported(b, target)) return;
 
-    const translate_c = b.dependency("translate_c", .{});
     // The layer under tuft: runtime calls, fibers and owners. The same options as anyone above us
     // passes, so a build shares one.
     const salamander = b.dependency("salamander", .{ .target = target, .optimize = optimize });
-    const zydis_t = zydis.cApi(b, translate_c, target, optimize);
+    const zydis_t = zydis.cApi(b, target, optimize);
 
     // Each layer only imports the ones below it
     const test_filters = b.option([]const []const u8, "test-filter", "Only run tests whose names contain this (repeatable)") orelse &.{};
@@ -109,8 +107,8 @@ pub fn build(b: *std.Build) void {
     // Official Vulkan headers to check tuft_gfx.vulkan's structs against
     const vulkan_headers = b.dependency("vulkan_headers", .{}).path("include");
     b.addNamedLazyPath("vulkan_headers", vulkan_headers);
-    const vk_t: Translator = .init(translate_c, .{
-        .c_source_file = b.path("tests/vulkan_layout.h"),
+    const vk_t = b.addTranslateC(.{
+        .root_source_file = b.path("tests/vulkan_layout.h"),
         .target = target,
         .optimize = optimize,
     });
@@ -121,12 +119,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "tuft_gfx", .module = gfx },
-            .{ .name = "vk", .module = vk_t.mod },
+            .{ .name = "vk", .module = vk_t.createModule() },
         },
     }));
 
     // `tuft_imgui_c` is just the C API with nothing linked
-    const imgui_c = imgui.cApi(b, translate_c, target, optimize, vulkan_headers);
+    const imgui_c = imgui.cApi(b, target, optimize, vulkan_headers);
     b.modules.put(b.graph.arena, "tuft_imgui_c", imgui_c) catch @panic("OOM");
     const ui_mod = ctx.addModule("ui", &.{
         .{ .name = "tuft_imgui_c", .module = imgui_c },
@@ -242,12 +240,20 @@ pub fn build(b: *std.Build) void {
 const zydis = struct {
     const defines: []const []const u8 = &.{ "-DZYDIS_STATIC_BUILD", "-DZYCORE_STATIC_BUILD" };
 
-    fn cApi(b: *std.Build, translate_c: *std.Build.Dependency, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
+    fn cApi(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
         const zydis_dep = b.dependency("zydis", .{});
         const zycore_dep = b.dependency("zycore", .{});
 
-        const t: Translator = .init(translate_c, .{
-            .c_source_file = zydis_dep.path("include/Zydis/Zydis.h"),
+        // Zig's translate-c overflows on Zydis' static asserts. The C build still checks them.
+        const header = b.addWriteFiles().add("zydis_api.h",
+            \\#include <Zycore/Defines.h>
+            \\#undef ZYAN_STATIC_ASSERT
+            \\#define ZYAN_STATIC_ASSERT(x) _Static_assert(1, "")
+            \\#include <Zydis/Zydis.h>
+            \\
+        );
+        const t = b.addTranslateC(.{
+            .root_source_file = header,
             .target = target,
             .optimize = optimize,
         });
@@ -255,8 +261,9 @@ const zydis = struct {
         t.addIncludePath(zycore_dep.path("include"));
         t.defineCMacro("ZYDIS_STATIC_BUILD", null);
         t.defineCMacro("ZYCORE_STATIC_BUILD", null);
-        t.mod.linkLibrary(library(b, zydis_dep, zycore_dep, target, optimize));
-        return t.mod;
+        const mod = t.createModule();
+        mod.linkLibrary(library(b, zydis_dep, zycore_dep, target, optimize));
+        return mod;
     }
 
     fn library(b: *std.Build, zydis_dep: *std.Build.Dependency, zycore_dep: *std.Build.Dependency, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Step.Compile {
@@ -337,9 +344,9 @@ const imgui = struct {
         return lib;
     }
 
-    fn cApi(b: *std.Build, translate_c: *std.Build.Dependency, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, vulkan_headers: std.Build.LazyPath) *std.Build.Module {
-        const t: Translator = .init(translate_c, .{
-            .c_source_file = b.path("src/imgui/c.h"),
+    fn cApi(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, vulkan_headers: std.Build.LazyPath) *std.Build.Module {
+        const t = b.addTranslateC(.{
+            .root_source_file = b.path("src/imgui/c.h"),
             .target = target,
             .optimize = optimize,
         });
@@ -349,7 +356,7 @@ const imgui = struct {
         t.addIncludePath(b.dependency("dear_bindings", .{}).path(""));
         t.addIncludePath(b.dependency("dear_bindings", .{}).path("backends"));
         t.addIncludePath(vulkan_headers);
-        return t.mod;
+        return t.createModule();
     }
 };
 

@@ -109,7 +109,7 @@ pub fn end(self: *Commands) void {
 }
 
 fn menuItem(it: Item) bool {
-    const shortcut: [*c]const c_char = if (it.chord) |chord| root.str(root.format("{f}", .{chord})) else null;
+    const shortcut: [*c]const u8 = if (it.chord) |chord| root.str(root.format("{f}", .{chord})) else null;
     const clicked = raw("ImGui_MenuItemBoolPtr")(root.str(it.label), shortcut, null, it.enabled);
     if (it.tooltip) |t| if (raw("ImGui_IsItemHovered")(c.ImGuiHoveredFlags_AllowWhenDisabled)) raw("ImGui_SetItemTooltipUnformatted")(root.str(t));
     return clicked;

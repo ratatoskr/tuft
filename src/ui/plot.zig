@@ -340,14 +340,14 @@ pub const max_labels = 256;
 
 /// Ticks at `values`. `labels` must match them if given, up to `max_labels`.
 pub fn setupAxisTicks(axis: Axis, values: []const f64, labels: ?[]const [:0]const u8, keep_default: bool) void {
-    var buf: [max_labels][*c]const c_char = undefined;
+    var buf: [max_labels][*c]const u8 = undefined;
     const n = if (labels) |l| @min(values.len, l.len, max_labels) else values.len;
     raw("ImPlot_SetupAxisTicks")(@backingInt(axis), values.ptr, @intCast(n), labelPtrs(labels, &buf), keep_default);
 }
 
 /// `count` ticks evenly from `min` to `max`.
 pub fn setupAxisTicksRange(axis: Axis, min: f64, max: f64, count: u32, labels: ?[]const [:0]const u8, keep_default: bool) void {
-    var buf: [max_labels][*c]const c_char = undefined;
+    var buf: [max_labels][*c]const u8 = undefined;
     const n = if (labels) |l| @min(count, l.len, max_labels) else count;
     raw("ImPlot_SetupAxisTicksRange")(@backingInt(axis), min, max, @intCast(n), labelPtrs(labels, &buf), keep_default);
 }
@@ -522,7 +522,7 @@ pub const BarGroupsOptions = struct {
 /// One item per label. `values` is a row of `groups` for each, one after the other.
 pub fn barGroups(labels: []const [:0]const u8, values: []const f64, groups: u32, options: BarGroupsOptions, spec: Spec) void {
     if (groups == 0) return;
-    var buf: [max_labels][*c]const c_char = undefined;
+    var buf: [max_labels][*c]const u8 = undefined;
     const items = @min(labels.len, max_labels, values.len / groups);
     const s = cSpec(spec, itemFlags(options, &.{ "horizontal", "stacked" }));
     raw("ImPlot_PlotBarGroups")(labelPtrs(labels, &buf), values.ptr, @intCast(items), @intCast(groups), options.group_size, options.shift, &s);
@@ -580,7 +580,7 @@ pub const PieChartOptions = struct {
 
 /// A slice per label, centred on `x`, `y`.
 pub fn pieChart(labels: []const [:0]const u8, values: []const f64, x: f64, y: f64, radius: f64, options: PieChartOptions, spec: Spec) void {
-    var buf: [max_labels][*c]const c_char = undefined;
+    var buf: [max_labels][*c]const u8 = undefined;
     const n = @min(labels.len, values.len, max_labels);
     const s = cSpec(spec, itemFlags(options, &.{ "normalize", "ignore_hidden", "exploding", "no_slice_border" }));
     raw("ImPlot_PlotPieChart")(labelPtrs(labels, &buf), values.ptr, @intCast(n), x, y, radius, optStr(options.label_format), options.angle0, &s);
@@ -1075,7 +1075,7 @@ fn cmapOr(cmap: ?Colormap) c_int {
     return if (cmap) |m| @backingInt(m) else -1;
 }
 
-fn optStr(s: ?[:0]const u8) [*c]const c_char {
+fn optStr(s: ?[:0]const u8) [*c]const u8 {
     return if (s) |v| str(v) else null;
 }
 
@@ -1088,7 +1088,7 @@ fn countOf(xs: ?[]const f64, ys: []const f64) c_int {
     return @intCast(@min(n, std.math.maxInt(c_int)));
 }
 
-fn labelPtrs(labels: ?[]const [:0]const u8, buf: *[max_labels][*c]const c_char) [*c]const [*c]const c_char {
+fn labelPtrs(labels: ?[]const [:0]const u8, buf: *[max_labels][*c]const u8) [*c]const [*c]const u8 {
     const l = labels orelse return null;
     const n = @min(l.len, max_labels);
     for (l[0..n], buf[0..n]) |s, *p| p.* = str(s);

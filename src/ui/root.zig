@@ -305,7 +305,7 @@ pub const MenuItemOptions = struct {
 
 /// True if clicked.
 pub fn menuItem(label: [:0]const u8, options: MenuItemOptions) bool {
-    const shortcut_text: [*c]const c_char = if (options.shortcut) |s| str(s) else null;
+    const shortcut_text: [*c]const u8 = if (options.shortcut) |s| str(s) else null;
     return raw("ImGui_MenuItemBoolPtr")(str(label), shortcut_text, options.checked, options.enabled);
 }
 
@@ -1343,7 +1343,7 @@ fn inAtlas(font: *c.ImFont) bool {
     return false;
 }
 
-pub fn str(s: [:0]const u8) [*c]const c_char {
+pub fn str(s: [:0]const u8) [*c]const u8 {
     return @ptrCast(s.ptr);
 }
 
