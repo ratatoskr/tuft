@@ -99,6 +99,8 @@ fn onMessage(self: *Focus, m: *const Window.Message) ?isize {
 
 fn mapped(self: *Focus, real: ?win.HWND) ?win.HWND {
     if (Blocker.isBypassing() or !self.owns.has(real)) return real;
+    // A window's own thread, like a file dialog's, gets the truth. Only the game's lied to
+    if (tuft_window.threadOf(real.?) == win.GetCurrentThreadId()) return real;
     return self.window.handle() orelse real;
 }
 
@@ -165,18 +167,58 @@ const tests = struct {
         var rig: Rig = undefined;
         try rig.init();
         defer rig.deinit();
-        const ours = try tuft_window.createHidden();
-        defer tuft_window.destroy(ours);
+        // On a thread of its own, like an app window or a file dialog
+        var other: OtherThread = .{};
+        try other.start();
+        defer other.stop();
+        const ours = other.hwnd.?;
         Ours.window = ours;
         const focus = try Focus.create(testing.allocator, rig.window, .{ .ctx = null, .func = Ours.owns });
         defer focus.destroy();
 
         try testing.expectEqual(@as(?win.HWND, rig.hwnd), focus.mapped(ours));
         try testing.expectEqual(@as(?win.HWND, null), focus.mapped(null));
-        const bypass = Blocker.Bypass.begin();
-        defer bypass.end();
-        try testing.expectEqual(@as(?win.HWND, ours), focus.mapped(ours));
+        {
+            const bypass = Blocker.Bypass.begin();
+            defer bypass.end();
+            try testing.expectEqual(@as(?win.HWND, ours), focus.mapped(ours));
+        }
+
+        // Its own thread gets the truth, or a dialog would go looking at the game's window
+        const mine = try tuft_window.createHidden();
+        defer tuft_window.destroy(mine);
+        Ours.window = mine;
+        try testing.expectEqual(@as(?win.HWND, mine), focus.mapped(mine));
     }
+
+    /// A hidden window made and kept on another thread.
+    const OtherThread = struct {
+        hwnd: ?win.HWND = null,
+        done: @import("tuft_arch").atomic.Value(bool) = .init(false),
+        made: @import("tuft_arch").atomic.Value(bool) = .init(false),
+        thread: ?std.Thread = null,
+
+        fn start(self: *OtherThread) !void {
+            self.thread = try std.Thread.spawn(.{}, run, .{self});
+            while (!self.made.load(.acquire)) std.Thread.yield() catch {};
+            if (self.hwnd == null) return error.CreateWindowFailed;
+        }
+
+        fn stop(self: *OtherThread) void {
+            self.done.store(true, .release);
+            self.thread.?.join();
+        }
+
+        fn run(self: *OtherThread) void {
+            self.hwnd = tuft_window.createHidden() catch null;
+            self.made.store(true, .release);
+            while (!self.done.load(.acquire)) {
+                tuft_window.pump();
+                std.Thread.yield() catch {};
+            }
+            if (self.hwnd) |h| tuft_window.destroy(h);
+        }
+    };
 
     test "wakes inactive game" {
         var rig: Rig = undefined;
