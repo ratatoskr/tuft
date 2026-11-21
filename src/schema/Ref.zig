@@ -7,7 +7,6 @@ const std = @import("std");
 const Address = @import("tuft_mem").Address;
 const Memory = @import("tuft_mem").Memory;
 const Schema = @import("salamander_schema").Schema;
-const sigs = @import("sigs.zig");
 const Prim = Schema.Prim;
 const Type = Schema.Ref;
 
@@ -57,69 +56,6 @@ pub fn at(schema: *const Schema, t: Type, address: anytype) Ref {
 /// A named type's, like `Player`.
 pub fn of(schema: *const Schema, type_name: []const u8, address: anytype) Ref {
     return at(schema, .{ .named = type_name }, address);
-}
-
-/// Where `annotations`' `[Sig]` or `[VirtualTable]` finds, recorded as `label`. Scans every time.
-pub fn locate(annotations: []const Schema.Annotation, which: []const u8, label: []const u8, missing: anyerror) Address {
-    var steps: [sigs.max_steps]@import("tuft_mem").Sig.Step = undefined;
-    const sig = (sigs.of(annotations, null, which, &steps) catch |err| return .fail(err)) orelse return .fail(missing);
-    return sig.locate(label);
-}
-
-/// Scans every time, keep the result. This process only.
-pub fn static(schema: *const Schema, name: []const u8) Ref {
-    const found = schema.findStatic(name) orelse return .{ .schema = schema, .type = byte, .address = .fail(error.NoSuchStatic) };
-    return .{ .schema = schema, .type = found.static.type, .address = locate(found.static.annotations, "Sig", name, error.NoSignature) };
-}
-
-pub fn staticOf(schema: *const Schema, type_name: []const u8, name: []const u8) Ref {
-    const missing: Ref = .{ .schema = schema, .type = byte, .address = .fail(error.NoSuchStatic) };
-    const t = schema.findType(type_name) orelse return missing;
-    const found = schema.staticOf(t, name) orelse return missing;
-    // Scans get recorded as `Type.static`
-    var buf: [128]u8 = undefined;
-    const label = std.fmt.bufPrint(&buf, "{s}.{s}", .{ t.name, name }) catch name;
-    return .{ .schema = schema, .type = found.static.type, .address = locate(found.static.annotations, "Sig", label, error.NoSignature) };
-}
-
-/// A top-level one. Scans every time, keep the result.
-pub fn function(schema: *const Schema, name: []const u8) Address {
-    for (schema.functions) |f| if (std.mem.eql(u8, f.name, name)) return locate(f.annotations, "Sig", f.name, error.NoSignature);
-    return .fail(error.NoSuchFunction);
-}
-
-/// Scans every time, keep the result.
-pub fn virtualTable(schema: *const Schema, type_name: []const u8) Address {
-    const t = schema.findType(type_name) orelse return .fail(error.NotAStruct);
-    if (t.kind != .@"struct") return .fail(error.NotAStruct);
-    var buf: [128]u8 = undefined;
-    return locate(t.annotations, "VirtualTable", std.fmt.bufPrint(&buf, "{s} vtable", .{t.name}) catch t.name, error.NoVirtualTable);
-}
-
-/// Slot of `name` in the shared vtable. Scans every time, keep the result.
-pub fn virtualSlot(schema: *const Schema, type_name: []const u8, name: []const u8) Address {
-    const t = schema.findType(type_name) orelse return .fail(error.NotAStruct);
-    const i = slot(schema, t, name) orelse return .fail(error.NoSuchFunction);
-    return virtualTable(schema, type_name).offset(@intCast(i * schema.pointer_size));
-}
-
-/// `[Virtual(n)]`'s `n`, from `t` or its bases.
-pub fn slot(schema: *const Schema, t: *const Schema.Type, name: []const u8) ?usize {
-    const f = schema.methodOf(t, name) orelse return null;
-    return f.method.virtual;
-}
-
-/// Only the type matters, nothing is read. Scans every time, keep the result.
-pub fn method(self: Ref, name: []const u8) Address {
-    const pointee = if (self.type == .pointer) self.type.pointer.* else self.type;
-    const t = self.schema.findType(if (pointee == .named) pointee.named else return .fail(error.NotAStruct)) orelse return .fail(error.NotAStruct);
-    if (t.kind != .@"struct") return .fail(error.NotAStruct);
-    const f = self.schema.methodOf(t, name) orelse return .fail(error.NoSuchFunction);
-    if (f.method.virtual != null) return .fail(error.NoSuchFunction);
-    // Scans get recorded as `Type.function`
-    var buf: [128]u8 = undefined;
-    const label = std.fmt.bufPrint(&buf, "{s}.{s}", .{ t.name, name }) catch name;
-    return locate(f.method.annotations, "Sig", label, error.NoSignature);
 }
 
 fn failed(self: Ref, err: anyerror) Ref {
@@ -252,7 +188,9 @@ pub fn vfunc(self: Ref, name: []const u8) Address {
     const r = if (self.type == .pointer) self.deref() else self;
     const addr = r.address.unwrap() catch return r.address;
     const t = r.named() orelse return r.failed(error.NotAStruct).address;
-    const i = slot(self.schema, t, name) orelse return r.failed(error.NoSuchFunction).address;
+    // `[Virtual(n)]`'s `n`, from `t` or its bases
+    const m = self.schema.methodOf(t, name) orelse return r.failed(error.NoSuchFunction).address;
+    const i = m.method.virtual orelse return r.failed(error.NoSuchFunction).address;
     const vtable = r.loadPointer(addr) catch |err| return r.failed(err).address;
     const f = r.loadPointer(vtable + i * self.schema.pointer_size) catch |err| return r.failed(err).address;
     return r.moved(self.type, f).address;

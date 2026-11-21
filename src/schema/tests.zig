@@ -239,38 +239,6 @@ test "typed in" {
     try testing.expectEqual(12, (try r.path("[2].health").load()).float);
 }
 
-test "statics and functions by signature" {
-    var p = try parsed(source, @sizeOf(usize));
-    defer p.deinit();
-    const schema = &p.schema;
-    const base = @intFromPtr(&sigTarget);
-    // After the lea and the ret
-    const data = base + 13 + @as(usize, if (@sizeOf(usize) == 8) 7 else 6) + 1;
-
-    try testing.expectEqual(0x0BADC0DE, (try Ref.static(schema, "answer").load()).uint);
-    try testing.expectEqual(data, try Ref.static(schema, "player").address.unwrap());
-    // Through the call to the jmp, then through the jmp
-    try testing.expectEqual(base + 13, try Ref.function(schema, "landing").unwrap());
-    // Only the type matters, so a pointer works without reading through it. Player gets Entity's
-    try testing.expectEqual(base + 5, try Ref.static(schema, "player").method("spawn").unwrap());
-    try testing.expectEqual(base + 5, try Ref.of(schema, "Entity", 0).method("spawn").unwrap());
-
-    try testing.expectError(error.NoSuchStatic, Ref.static(schema, "nope").load());
-    try testing.expectError(error.NoSuchFunction, Ref.function(schema, "nope").unwrap());
-    try testing.expectError(error.NoSuchFunction, Ref.of(schema, "Player", 0).method("nope").unwrap());
-    try testing.expectError(error.NoSuchFunction, Ref.of(schema, "Player", 0).method("attack").unwrap());
-    try testing.expectError(error.NotAStruct, Ref.of(schema, "Job", 0).method("spawn").unwrap());
-
-    try testing.expectEqual(0x0BADC0DE, (try Ref.staticOf(schema, "Player", "count").load()).uint);
-    try testing.expectError(error.NoSuchStatic, Ref.staticOf(schema, "Entity", "count").load());
-
-    try testing.expectEqual(data, try Ref.virtualTable(schema, "Player").unwrap());
-    try testing.expectEqual(data + 9 * @sizeOf(usize), try Ref.virtualSlot(schema, "Player", "attack").unwrap());
-    try testing.expectEqual(data + 2 * @sizeOf(usize), try Ref.virtualSlot(schema, "Player", "update").unwrap());
-    try testing.expectError(error.NoVirtualTable, Ref.virtualTable(schema, "Entity").unwrap());
-    try testing.expectError(error.NoSuchFunction, Ref.virtualSlot(schema, "Player", "nope").unwrap());
-}
-
 test "missing signature says why" {
     const saved = std.testing.log_level;
     std.testing.log_level = .err;
@@ -283,13 +251,22 @@ test "missing signature says why" {
         \\[game.Sig("90", Sideways)] void bad_step();
     , @sizeOf(usize));
     defer p.deinit();
-    const s = &p.schema;
-    try testing.expectError(error.PatternNotFound, Ref.function(s, "missing").unwrap());
-    try testing.expectError(error.ModuleNotFound, Ref.function(s, "no_module").unwrap());
-    try testing.expectError(error.SectionNotFound, Ref.function(s, "no_section").unwrap());
+    // Its marker `mov` is what some of these find
+    _ = &sigTarget;
+    const f = p.schema.functions;
+    var steps: [sigs.max_steps]mem.Sig.Step = undefined;
+    const found = struct {
+        fn of(fn_: salamander.Schema.Method, st: *[sigs.max_steps]mem.Sig.Step) !usize {
+            const sig = (try sigs.of(fn_.annotations, "game", "Sig", st)).?;
+            return sig.locate(fn_.name).unwrap();
+        }
+    };
+    try testing.expectError(error.PatternNotFound, found.of(f[0], &steps));
+    try testing.expectError(error.ModuleNotFound, found.of(f[1], &steps));
+    try testing.expectError(error.SectionNotFound, found.of(f[2], &steps));
     // The marker `mov` points nowhere
-    try testing.expectError(error.NoAddressOperand, Ref.function(s, "no_operand").unwrap());
-    try testing.expectError(error.BadStep, Ref.function(s, "bad_step").unwrap());
+    try testing.expectError(error.NoAddressOperand, found.of(f[3], &steps));
+    try testing.expectError(error.BadStep, found.of(f[4], &steps));
 }
 
 test "steps" {

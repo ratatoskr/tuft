@@ -28,13 +28,12 @@ const red: ui.Color = .{ 1, 0.4, 0.4, 1 };
 
 allocator: std.mem.Allocator,
 memory: Memory = .local,
+/// Also what finds statics and functions, through its `scan`.
 symbols: Symbols = .none,
 claims: Claims = .none,
 /// Off for text that isn't ours to change, like a plugin's.
 editable: bool = true,
 schema: ?*const Schema = null,
-/// Null leaves statics and functions unfound.
-find: ?*const fn (sig: Sig, label: []const u8) anyerror!usize = null,
 /// Keyed by signature so it's kept while the text changes around it.
 found: std.AutoHashMapUnmanaged(u64, Found) = .empty,
 /// Null shows just the layout.
@@ -142,17 +141,17 @@ pub fn following(self: *const StructView) ?[]const u8 {
 
 /// Slow, so only when asked, like on Ctrl+Enter.
 pub fn findSignatures(self: *StructView) void {
-    const find = self.find orelse return self.fail("Signatures can't be looked for here", .{});
+    if (self.symbols.vtable.scan == null) return self.fail("Signatures can't be looked for here", .{});
     const schema = self.schema orelse return;
     self.found.clearRetainingCapacity();
     var tally: Tally = .{};
-    for (schema.statics) |s| self.lookFor(find, s.annotations, s.name, &tally);
-    for (schema.functions) |f| self.lookFor(find, f.annotations, f.name, &tally);
+    for (schema.statics) |s| self.lookFor(s.annotations, s.name, &tally);
+    for (schema.functions) |f| self.lookFor(f.annotations, f.name, &tally);
     for (schema.types) |t| switch (t.kind) {
         .@"struct" => |s| {
             var label: [128]u8 = undefined;
-            for (s.statics) |st| self.lookFor(find, st.annotations, std.fmt.bufPrint(&label, "{s}.{s}", .{ t.name, st.name }) catch st.name, &tally);
-            for (s.methods) |m| self.lookFor(find, m.annotations, std.fmt.bufPrint(&label, "{s}.{s}", .{ t.name, m.name }) catch m.name, &tally);
+            for (s.statics) |st| self.lookFor(st.annotations, std.fmt.bufPrint(&label, "{s}.{s}", .{ t.name, st.name }) catch st.name, &tally);
+            for (s.methods) |m| self.lookFor(m.annotations, std.fmt.bufPrint(&label, "{s}.{s}", .{ t.name, m.name }) catch m.name, &tally);
         },
         else => {},
     };
@@ -166,13 +165,13 @@ const Tally = struct {
     first_len: usize = 0,
 };
 
-fn lookFor(self: *StructView, find: anytype, annotations: []const Schema.Annotation, label: []const u8, tally: *Tally) void {
+fn lookFor(self: *StructView, annotations: []const Schema.Annotation, label: []const u8, tally: *Tally) void {
     var steps: [sigs.max_steps]Sig.Step = undefined;
     const sig = (sigs.of(annotations, null, "Sig", &steps) catch return) orelse return;
     const key = sigKey(sig);
     if (self.found.contains(key)) return;
     tally.total += 1;
-    const result: Found = if (find(sig, label)) |a| .{ .ok = a } else |err| .{ .err = err };
+    const result: Found = if (self.symbols.scan(sig, label).unwrap()) |a| .{ .ok = a } else |err| .{ .err = err };
     self.found.put(self.allocator, key, result) catch {};
     if (result == .err) {
         if (tally.missing == 0) {
@@ -181,10 +180,6 @@ fn lookFor(self: *StructView, find: anytype, annotations: []const Schema.Annotat
         }
         tally.missing += 1;
     }
-}
-
-pub fn scanHere(sig: Sig, label: []const u8) anyerror!usize {
-    return sig.locate(label).unwrap();
 }
 
 fn sigKey(sig: Sig) u64 {
@@ -604,7 +599,7 @@ pub fn commands(self: *StructView, menu: *ui.Commands) void {
         if (self.editTarget()) |t| self.edit.remove(t, row.?);
     }
     menu.separator();
-    if (menu.item(.{ .label = "Find signatures", .chord = keys.run, .enabled = self.find != null and self.schema != null, .tooltip = "Scans for every [Sig], statics and functions. Kept until the next time" })) self.findSignatures();
+    if (menu.item(.{ .label = "Find signatures", .chord = keys.run, .enabled = self.symbols.vtable.scan != null and self.schema != null, .tooltip = "Scans for every [Sig], statics and functions. Kept until the next time" })) self.findSignatures();
     const mappable = if (row) |r| r.kind == .static and r.err == null and self.staticTarget(r) != null else false;
     if (menu.item(.{ .label = "Map through this", .enabled = mappable, .tooltip = "Lays out what it points at, following it as it changes" })) {
         const r = row.?;
@@ -856,12 +851,13 @@ const tests = struct {
         var instance: usize = 0;
         var scans: usize = 0;
 
-        fn find(sig: Sig, _: []const u8) anyerror!usize {
+        fn scan(_: ?*anyopaque, sig: Sig, _: []const u8) mem.Address {
             scans += 1;
-            if (std.mem.startsWith(u8, sig.pattern, "48 8B 0D")) return @intFromPtr(&instance);
-            if (std.mem.startsWith(u8, sig.pattern, "E8")) return 0x1234;
-            return error.NotFound;
+            if (std.mem.startsWith(u8, sig.pattern, "48 8B 0D")) return .at(@intFromPtr(&instance));
+            if (std.mem.startsWith(u8, sig.pattern, "E8")) return .at(0x1234);
+            return .fail(error.NotFound);
         }
+        const symbols: Symbols = .{ .vtable = &.{ .scan = scan } };
     };
 
     test "signatures and instance" {
@@ -873,7 +869,7 @@ const tests = struct {
         Game.instance = @intFromPtr(gsm.ptr);
         Game.scans = 0;
 
-        var view: StructView = .{ .allocator = testing.allocator, .find = Game.find };
+        var view: StructView = .{ .allocator = testing.allocator, .symbols = Game.symbols };
         defer view.deinit();
         view.setSchema(&parsed.schema);
         view.build();

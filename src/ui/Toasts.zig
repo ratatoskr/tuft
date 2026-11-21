@@ -207,9 +207,9 @@ fn drawSlot(_: *Toasts, slot: *const Slot) void {
     if (slot.title_len > 0) {
         const b = root.bold();
         defer b.end();
-        raw("ImGui_PushStyleColorImVec4")(c.ImGuiCol_Text, color);
+        const coloured = root.withColor(c.ImGuiCol_Text, color);
+        defer coloured.end();
         textOf(slot.title());
-        raw("ImGui_PopStyleColor")();
     }
     if (slot.text_len > 0) {
         raw("ImGui_PushTextWrapPos")(0);

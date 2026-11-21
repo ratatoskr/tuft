@@ -495,6 +495,32 @@ pub fn textColored(color: Color, comptime fmt: []const u8, args: anytype) void {
     raw("ImGui_TextColoredUnformatted")(vec4(color), str(format(fmt, args)));
 }
 
+/// `color` for `col` until `end`, like an error line's text. Takes ImGui's packed ABGR `u32`, a
+/// `Color` or an `ImVec4`. Null changes nothing.
+pub fn withColor(col: c.ImGuiCol, color: anytype) StyleColors {
+    const T = @TypeOf(color);
+    if (@typeInfo(T) == .optional) return if (color) |v| withColor(col, v) else .{ .n = 0 };
+    if (T == u32 or T == comptime_int) {
+        raw("ImGui_PushStyleColor")(col, color);
+    } else if (T == c.ImVec4) {
+        raw("ImGui_PushStyleColorImVec4")(col, color);
+    } else raw("ImGui_PushStyleColorImVec4")(col, vec4(color));
+    return .{};
+}
+
+/// The style's own `from` colour for `col` until `end`, like `ButtonActive` for a button that's lit.
+pub fn withStyleColor(col: c.ImGuiCol, from: c.ImGuiCol) StyleColors {
+    return withColor(col, raw("ImGui_GetStyleColorVec4")(from).*);
+}
+
+pub const StyleColors = struct {
+    n: i32 = 1,
+
+    pub fn end(self: StyleColors) void {
+        if (self.n > 0) raw("ImGui_PopStyleColorEx")(self.n);
+    }
+};
+
 pub fn textWrapped(comptime fmt: []const u8, args: anytype) void {
     raw("ImGui_TextWrappedUnformatted")(str(format(fmt, args)));
 }
@@ -662,12 +688,10 @@ pub fn copyableText(id_: [:0]const u8, comptime fmt: []const u8, args: anytype) 
 /// `width` works like in `setNextItemWidth`.
 pub fn copyableTextWidth(id_: [:0]const u8, width: f32, comptime fmt: []const u8, args: anytype) void {
     const value = format(fmt, args);
-    raw("ImGui_PushStyleColor")(c.ImGuiCol_FrameBg, 0);
+    const clear = withColor(c.ImGuiCol_FrameBg, @as(u32, 0));
+    defer clear.end();
     raw("ImGui_PushStyleVarImVec2")(c.ImGuiStyleVar_FramePadding, .{ .x = 0, .y = 0 });
-    defer {
-        raw("ImGui_PopStyleVar")();
-        raw("ImGui_PopStyleColor")();
-    }
+    defer raw("ImGui_PopStyleVar")();
     setNextItemWidth(width);
     // Read-only, so ImGui never writes to it despite the @constCast
     _ = raw("ImGui_InputText")(str(id_), @ptrCast(@constCast(value.ptr)), value.len + 1, c.ImGuiInputTextFlags_ReadOnly | c.ImGuiInputTextFlags_AutoSelectAll);
@@ -1391,6 +1415,36 @@ pub fn pascalCase(comptime name: []const u8) []const u8 {
         }
         break :blk out;
     };
+}
+
+/// A code name for people, so `gourmet_points` and `gourmetPoints` are both "Gourmet points".
+pub fn humanName(buf: []u8, name: []const u8) []const u8 {
+    var n: usize = 0;
+    for (name, 0..) |ch, i| {
+        if (n + 2 > buf.len) break;
+        if (ch == '_') {
+            if (n > 0 and buf[n - 1] != ' ') {
+                buf[n] = ' ';
+                n += 1;
+            }
+            continue;
+        }
+        if (std.ascii.isUpper(ch) and i > 0 and std.ascii.isLower(name[i - 1])) {
+            buf[n] = ' ';
+            n += 1;
+            buf[n] = std.ascii.toLower(ch);
+        } else buf[n] = if (n == 0) std.ascii.toUpper(ch) else ch;
+        n += 1;
+    }
+    return buf[0..n];
+}
+
+test "names for people" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("Gourmet points", humanName(&buf, "gourmet_points"));
+    try std.testing.expectEqualStrings("Gourmet points", humanName(&buf, "gourmetPoints"));
+    try std.testing.expectEqualStrings("Copy address", humanName(&buf, "copy_address"));
+    try std.testing.expectEqualStrings("Hp max", humanName(&buf, "_hp__max"));
 }
 
 threadlocal var format_buffer: [4096]u8 = undefined;
