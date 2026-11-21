@@ -308,6 +308,67 @@ pub extern "comdlg32" fn GetOpenFileNameW(ofn: *OPENFILENAMEW) callconv(.winapi)
 pub extern "comdlg32" fn GetSaveFileNameW(ofn: *OPENFILENAMEW) callconv(.winapi) BOOL;
 /// 0 means the user cancelled.
 pub extern "comdlg32" fn CommDlgExtendedError() callconv(.winapi) DWORD;
+
+// COM, for the folder picker. Only the methods we call, in vtable order.
+pub const HRESULT = i32;
+pub const COINIT_APARTMENTTHREADED: DWORD = 0x2;
+pub const COINIT_DISABLE_OLE1DDE: DWORD = 0x4;
+pub const CLSCTX_INPROC_SERVER: DWORD = 0x1;
+/// What `Show` gives when the user cancels.
+pub const HRESULT_CANCELLED: HRESULT = @bitCast(@as(u32, 0x800704C7));
+pub const FOS_NOCHANGEDIR: DWORD = 0x8;
+pub const FOS_PICKFOLDERS: DWORD = 0x20;
+pub const FOS_FORCEFILESYSTEM: DWORD = 0x40;
+pub const FOS_PATHMUSTEXIST: DWORD = 0x800;
+pub const SIGDN_FILESYSPATH: u32 = 0x80058000;
+pub const CLSID_FileOpenDialog: zwin.GUID = .parse("{DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7}");
+pub const IID_IFileDialog: zwin.GUID = .parse("{42f85136-db7e-439c-85f1-e4075d135fc8}");
+pub const IID_IShellItem: zwin.GUID = .parse("{43826d1e-e718-42ee-bc55-a1e261c37bfe}");
+pub extern "ole32" fn CoInitializeEx(reserved: ?*anyopaque, flags: DWORD) callconv(.winapi) HRESULT;
+pub extern "ole32" fn CoUninitialize() callconv(.winapi) void;
+pub extern "ole32" fn CoCreateInstance(clsid: *const zwin.GUID, outer: ?*anyopaque, context: DWORD, iid: *const zwin.GUID, out: *?*anyopaque) callconv(.winapi) HRESULT;
+pub extern "shell32" fn SHCreateItemFromParsingName(path: [*:0]const u16, bind: ?*anyopaque, iid: *const zwin.GUID, out: *?*anyopaque) callconv(.winapi) HRESULT;
+
+pub const IShellItem = extern struct {
+    vtable: *const VTable,
+
+    pub const VTable = extern struct {
+        QueryInterface: *const anyopaque,
+        AddRef: *const anyopaque,
+        Release: *const fn (*IShellItem) callconv(.winapi) u32,
+        BindToHandler: *const anyopaque,
+        GetParent: *const anyopaque,
+        GetDisplayName: *const fn (*IShellItem, sigdn: u32, name: *?[*:0]u16) callconv(.winapi) HRESULT,
+    };
+};
+
+pub const IFileDialog = extern struct {
+    vtable: *const VTable,
+
+    pub const VTable = extern struct {
+        QueryInterface: *const anyopaque,
+        AddRef: *const anyopaque,
+        Release: *const fn (*IFileDialog) callconv(.winapi) u32,
+        Show: *const fn (*IFileDialog, owner: ?HWND) callconv(.winapi) HRESULT,
+        SetFileTypes: *const anyopaque,
+        SetFileTypeIndex: *const anyopaque,
+        GetFileTypeIndex: *const anyopaque,
+        Advise: *const anyopaque,
+        Unadvise: *const anyopaque,
+        SetOptions: *const fn (*IFileDialog, options: DWORD) callconv(.winapi) HRESULT,
+        GetOptions: *const fn (*IFileDialog, options: *DWORD) callconv(.winapi) HRESULT,
+        SetDefaultFolder: *const anyopaque,
+        SetFolder: *const fn (*IFileDialog, folder: *IShellItem) callconv(.winapi) HRESULT,
+        GetFolder: *const anyopaque,
+        GetCurrentSelection: *const anyopaque,
+        SetFileName: *const anyopaque,
+        GetFileName: *const anyopaque,
+        SetTitle: *const fn (*IFileDialog, title: [*:0]const u16) callconv(.winapi) HRESULT,
+        SetOkButtonLabel: *const anyopaque,
+        SetFileNameLabel: *const anyopaque,
+        GetResult: *const fn (*IFileDialog, item: *?*IShellItem) callconv(.winapi) HRESULT,
+    };
+};
 pub extern "user32" fn CreateWindowExW(
     dwExStyle: DWORD,
     lpClassName: [*:0]const u16,

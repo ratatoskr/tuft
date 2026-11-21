@@ -78,6 +78,19 @@ pub const FileDialog = struct {
 /// The caller frees the path.
 pub const pickFile = native.pickFile;
 
+pub const FolderDialog = struct {
+    owner: ?Handle = null,
+    title: []const u8 = "",
+    /// Where it starts. Empty is the system's pick.
+    folder: []const u8 = "",
+    /// See `FileDialog.alive`.
+    alive: ?FileDialog.Alive = null,
+};
+
+/// A native dialog for picking a folder. Blocks the calling thread until it's done. Null if cancelled.
+/// The caller frees the path.
+pub const pickFolder = native.pickFolder;
+
 test {
     std.testing.refAllDecls(@This());
     _ = native;

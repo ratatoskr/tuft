@@ -42,7 +42,7 @@ pub fn pickFile(gpa: std.mem.Allocator, options: window.FileDialog) !?[]u8 {
         .Flags = win.OFN_EXPLORER | win.OFN_NOCHANGEDIR | win.OFN_HIDEREADONLY | win.OFN_PATHMUSTEXIST |
             (if (options.mode == .save) win.OFN_OVERWRITEPROMPT else win.OFN_FILEMUSTEXIST),
     };
-    var watching = Watch.start(options);
+    var watching = Watch.start(options.owner, options.alive);
     defer if (watching) |*w| w.stop();
     const ok = switch (options.mode) {
         .open => win.GetOpenFileNameW(&ofn),
@@ -55,6 +55,53 @@ pub fn pickFile(gpa: std.mem.Allocator, options: window.FileDialog) !?[]u8 {
     return try std.unicode.utf16LeToUtf8Alloc(gpa, std.mem.sliceTo(&file, 0));
 }
 
+pub fn pickFolder(gpa: std.mem.Allocator, options: window.FolderDialog) !?[]u8 {
+    const W = std.unicode.utf8ToUtf16LeAllocZ;
+    // Fine if it's already set up on this thread. A thread set up for free threading still works
+    const init = win.CoInitializeEx(null, win.COINIT_APARTMENTTHREADED | win.COINIT_DISABLE_OLE1DDE);
+    defer if (init >= 0) win.CoUninitialize();
+
+    var raw: ?*anyopaque = null;
+    if (win.CoCreateInstance(&win.CLSID_FileOpenDialog, null, win.CLSCTX_INPROC_SERVER, &win.IID_IFileDialog, &raw) < 0) return error.DialogFailed;
+    const dialog: *win.IFileDialog = @ptrCast(@alignCast(raw orelse return error.DialogFailed));
+    defer _ = dialog.vtable.Release(dialog);
+
+    var flags: win.DWORD = 0;
+    _ = dialog.vtable.GetOptions(dialog, &flags);
+    _ = dialog.vtable.SetOptions(dialog, flags | win.FOS_PICKFOLDERS | win.FOS_FORCEFILESYSTEM | win.FOS_PATHMUSTEXIST | win.FOS_NOCHANGEDIR);
+    if (options.title.len > 0) {
+        const title = try W(gpa, options.title);
+        defer gpa.free(title);
+        _ = dialog.vtable.SetTitle(dialog, title);
+    }
+    // A folder that's gone just starts it somewhere else
+    if (options.folder.len > 0) start: {
+        const path = try W(gpa, options.folder);
+        defer gpa.free(path);
+        var item_raw: ?*anyopaque = null;
+        if (win.SHCreateItemFromParsingName(path, null, &win.IID_IShellItem, &item_raw) < 0) break :start;
+        const item: *win.IShellItem = @ptrCast(@alignCast(item_raw orelse break :start));
+        defer _ = item.vtable.Release(item);
+        _ = dialog.vtable.SetFolder(dialog, item);
+    }
+
+    var watching = Watch.start(options.owner, options.alive);
+    defer if (watching) |*w| w.stop();
+    const shown = dialog.vtable.Show(dialog, options.owner);
+    if (shown == win.HRESULT_CANCELLED) return null;
+    if (shown < 0) return error.DialogFailed;
+
+    var result: ?*win.IShellItem = null;
+    if (dialog.vtable.GetResult(dialog, &result) < 0) return error.DialogFailed;
+    const item = result orelse return error.DialogFailed;
+    defer _ = item.vtable.Release(item);
+    var name: ?[*:0]u16 = null;
+    if (item.vtable.GetDisplayName(item, win.SIGDN_FILESYSPATH, &name) < 0) return error.DialogFailed;
+    const wide = name orelse return error.DialogFailed;
+    defer win.CoTaskMemFree(wide);
+    return try std.unicode.utf16LeToUtf8Alloc(gpa, std.mem.span(wide));
+}
+
 /// Calls `alive` while the dialog's thread still answers, see `FileDialog.alive`.
 const Watch = struct {
     done: sync.Signal,
@@ -63,9 +110,9 @@ const Watch = struct {
     const interval_ms = 500;
 
     /// Null if there's nothing to call, or no thread for it, which only means no calls.
-    fn start(options: window.FileDialog) ?Watch {
-        const alive = options.alive orelse return null;
-        const owner = options.owner orelse return null;
+    fn start(owner_: ?Handle, alive_: ?window.FileDialog.Alive) ?Watch {
+        const alive = alive_ orelse return null;
+        const owner = owner_ orelse return null;
         const done = sync.Signal.init() catch return null;
         const thread = std.Thread.spawn(.{}, run, .{ done, owner, alive }) catch {
             done.deinit();
@@ -198,7 +245,7 @@ test "a file dialog's watch only calls while its thread answers" {
         }
     };
     var count: Count = .{};
-    var watching = Watch.start(.{ .mode = .open, .owner = hwnd, .alive = .{ .ctx = &count, .func = Count.add } }).?;
+    var watching = Watch.start(hwnd, .{ .ctx = &count, .func = Count.add }).?;
     defer watching.stop();
 
     // Pumping, like a dialog's modal loop
