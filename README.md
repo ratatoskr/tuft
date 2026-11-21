@@ -1,5 +1,9 @@
 # Tuft
 
+[![CI](https://img.shields.io/github/actions/workflow/status/ratatoskr/tuft/main_ci.yml?branch=main&label=CI)](https://github.com/ratatoskr/tuft/actions/workflows/main_ci.yml)
+[![License](https://img.shields.io/github/license/ratatoskr/tuft)](https://github.com/ratatoskr/tuft/blob/main/LICENSE)
+[![Zig](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Fratatoskr%2Ftuft%2Fmain%2Fbuild.zig.zon&search=minimum_zig_version%5Cs%2A%3D%5Cs%2A%22%28%5B%5E%22%2B%5D%2B%29&replace=%241&label=zig&color=f7a41d&logo=zig&logoColor=white)](https://github.com/ratatoskr/tuft/blob/main/build.zig.zon)
+
 A Zig toolkit for modding x64 and x86 Windows games.
 
 Pre-release. Expect breaking changes.
