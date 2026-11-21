@@ -251,8 +251,8 @@ test "missing signature says why" {
         \\[game.Sig("90", Sideways)] void bad_step();
     , @sizeOf(usize));
     defer p.deinit();
-    // Its marker `mov` is what some of these find
-    _ = &sigTarget;
+    // Its marker `mov` is what some of these find, so it has to be kept in a release build
+    std.mem.doNotOptimizeAway(&sigTarget);
     const f = p.schema.functions;
     var steps: [sigs.max_steps]mem.Sig.Step = undefined;
     const found = struct {
