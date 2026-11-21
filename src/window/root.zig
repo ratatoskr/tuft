@@ -55,6 +55,9 @@ pub const FileDialog = struct {
 
     mode: Mode,
     owner: ?Handle = null,
+    /// A window of another thread, like a game's, to show it over. Unlike `owner` it doesn't tie
+    /// the dialog to that thread, which would make it as slow as that thread's message loop.
+    over: ?Handle = null,
     title: []const u8 = "",
     /// Where it starts. Empty is the system's pick.
     folder: []const u8 = "",
@@ -80,12 +83,18 @@ pub const pickFile = native.pickFile;
 
 pub const FolderDialog = struct {
     owner: ?Handle = null,
+    /// See `FileDialog.over`.
+    over: ?Handle = null,
     title: []const u8 = "",
     /// Where it starts. Empty is the system's pick.
     folder: []const u8 = "",
     /// See `FileDialog.alive`.
     alive: ?FileDialog.Alive = null,
 };
+
+/// Whether `window` is one of a dialog `pickFile` or `pickFolder` is showing right now, for focus
+/// hooks that keep the game thinking it's active while one of our windows is. Any thread.
+pub const ownsDialog = native.ownsDialog;
 
 /// A native dialog for picking a folder. Blocks the calling thread until it's done. Null if cancelled.
 /// The caller frees the path.

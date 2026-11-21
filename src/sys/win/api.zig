@@ -422,6 +422,7 @@ pub const MSG = extern struct {
     lPrivate: u32 = 0,
 };
 pub const RECT = extern struct { left: i32 = 0, top: i32 = 0, right: i32 = 0, bottom: i32 = 0 };
+pub extern "user32" fn GetWindowRect(hWnd: HWND, rect: *RECT) callconv(.winapi) BOOL;
 pub const POINT = extern struct { x: i32 = 0, y: i32 = 0 };
 pub const PM_REMOVE: u32 = 1;
 pub const PM_NOREMOVE: u32 = 0;

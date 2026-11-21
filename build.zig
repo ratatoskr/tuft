@@ -71,6 +71,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "tuft_text", .module = text },
     });
     const window = ctx.addModule("window", &.{
+        .{ .name = "tuft_arch", .module = arch },
         .{ .name = "tuft_sys", .module = sys },
         .{ .name = "tuft_mem", .module = mem },
     });

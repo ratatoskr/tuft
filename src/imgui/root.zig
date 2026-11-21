@@ -1,6 +1,7 @@
 //! Dear ImGui drawn into a game's frames.
 
 const std = @import("std");
+const tuft_window = @import("tuft_window");
 
 pub const c = @import("tuft_imgui_c");
 pub const Renderer = @import("Renderer.zig");
@@ -11,9 +12,10 @@ pub const AppWindow = @import("AppWindow.zig");
 /// Images to draw, in any context.
 pub const Texture = @import("Texture.zig");
 
-/// Whether `window` is an outside ImGui window or an app window. Any thread.
+/// Whether `window` is an outside ImGui window, an app window or a file dialog of ours. Any thread.
 pub fn isOurs(_: ?*anyopaque, window: *anyopaque) bool {
-    return Win32.isOurs(null, @ptrCast(window)) or AppWindow.ownsWindow(null, @ptrCast(window));
+    return Win32.isOurs(null, @ptrCast(window)) or AppWindow.ownsWindow(null, @ptrCast(window)) or
+        tuft_window.ownsDialog(@ptrCast(window));
 }
 pub const input = @import("input.zig");
 

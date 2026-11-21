@@ -5,6 +5,7 @@ const std = @import("std");
 const window = @import("../root.zig");
 const win = @import("tuft_sys").win;
 const sync = @import("tuft_sys").sync;
+const Atomic = @import("tuft_arch").atomic.Value;
 
 pub const Handle = win.HWND;
 pub const Subclass = @import("Subclass.zig");
@@ -30,8 +31,12 @@ pub fn pickFile(gpa: std.mem.Allocator, options: window.FileDialog) !?[]u8 {
         file[n] = 0;
     }
     const def_ext: ?[*:0]const u16 = if (options.extension.len > 1) try W(a, options.extension[1..]) else null;
+    const stand_in = StandIn.over(options.over);
+    defer if (stand_in) |h| destroy(h);
+    const noted = DialogThreads.note();
+    defer DialogThreads.forget(noted);
     var ofn: win.OPENFILENAMEW = .{
-        .hwndOwner = options.owner,
+        .hwndOwner = options.owner orelse stand_in,
         .lpstrFilter = filter.ptr,
         .nFilterIndex = 1,
         .lpstrFile = &file,
@@ -85,9 +90,13 @@ pub fn pickFolder(gpa: std.mem.Allocator, options: window.FolderDialog) !?[]u8 {
         _ = dialog.vtable.SetFolder(dialog, item);
     }
 
+    const stand_in = StandIn.over(options.over);
+    defer if (stand_in) |h| destroy(h);
+    const noted = DialogThreads.note();
+    defer DialogThreads.forget(noted);
     var watching = Watch.start(options.owner, options.alive);
     defer if (watching) |*w| w.stop();
-    const shown = dialog.vtable.Show(dialog, options.owner);
+    const shown = dialog.vtable.Show(dialog, options.owner orelse stand_in);
     if (shown == win.HRESULT_CANCELLED) return null;
     if (shown < 0) return error.DialogFailed;
 
@@ -101,6 +110,53 @@ pub fn pickFolder(gpa: std.mem.Allocator, options: window.FolderDialog) !?[]u8 {
     defer win.CoTaskMemFree(wide);
     return try std.unicode.utf16LeToUtf8Alloc(gpa, std.mem.span(wide));
 }
+
+pub fn ownsDialog(hwnd: Handle) bool {
+    const id = threadOf(hwnd);
+    if (id == 0) return false;
+    for (&DialogThreads.ids) |*slot| if (slot.load(.acquire) == id) return true;
+    return false;
+}
+
+/// Threads in `pickFile` or `pickFolder`. Every window of theirs is the dialog's while they are.
+const DialogThreads = struct {
+    var ids: [8]Atomic(u32) = @splat(.init(0));
+
+    /// Null if they're all taken, which only means the game might see it as another program's.
+    fn note() ?*Atomic(u32) {
+        const me = win.GetCurrentThreadId();
+        for (&ids) |*slot| if (slot.cmpxchgStrong(0, me, .acq_rel, .acquire) == null) return slot;
+        return null;
+    }
+
+    fn forget(slot: ?*Atomic(u32)) void {
+        if (slot) |s| s.store(0, .release);
+    }
+};
+
+/// A hidden topmost window of this thread, covering `over`, to own a dialog. The dialog then opens
+/// centered over `over` and in front of it, without waiting on `over`'s thread.
+const StandIn = struct {
+    fn over(target: ?Handle) ?Handle {
+        const t = target orelse return null;
+        var rect: win.RECT = .{};
+        if (!win.GetWindowRect(t, &rect).toBool()) return null;
+        return win.CreateWindowExW(
+            win.WS_EX_TOOLWINDOW | win.WS_EX_TOPMOST,
+            std.unicode.utf8ToUtf16LeStringLiteral("STATIC"),
+            std.unicode.utf8ToUtf16LeStringLiteral(""),
+            win.WS_POPUP,
+            rect.left,
+            rect.top,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+            null,
+            null,
+            null,
+            null,
+        );
+    }
+};
 
 /// Calls `alive` while the dialog's thread still answers, see `FileDialog.alive`.
 const Watch = struct {
