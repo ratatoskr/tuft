@@ -14,8 +14,8 @@
     },
     .dependencies = .{
         .salamander = .{
-            .url = "git+https://github.com/ratatoskr/salamander#ca08de358a9ff5f5ea1b45db4507057f250794bd",
-            .hash = "salamander-0.0.1-6ZeDNl8rDQDRuID3lgv3LqEdYmpKtceKXzkCyqY6WawZ",
+            .url = "git+https://github.com/ratatoskr/salamander#57e62e1df36a60bc16f396bd75a954173392c3b7",
+            .hash = "salamander-0.0.1-6ZeDNrw3DQDuyz_L2uYeX4Ntv4V49GW5PMeV61fCT-fP",
         },
         .vulkan_headers = .{
             .url = "git+https://github.com/KhronosGroup/Vulkan-Headers?ref=v1.4.368#88487f687f3100ebe1d3559a8a34d971ee85b977",
