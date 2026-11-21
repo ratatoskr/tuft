@@ -59,6 +59,8 @@ sink: Sink,
 /// user32's real `DefWindowProcW`, not our import thunk, which goes away with the DLL.
 def_window_proc: *const win.WNDPROC,
 instance: ?win.HINSTANCE,
+/// Big and small, on every window it makes. Null for none.
+icons: [2]?*anyopaque = .{ null, null },
 
 tasks: tuft_event.TaskQueue = .{},
 thread: ?win.HANDLE = null,
@@ -84,8 +86,9 @@ buttons: u8 = 0,
 // Render thread only
 hovering: bool = false,
 
-/// Becomes ImGui's platform backend for the current context. Render thread.
-pub fn create(allocator: std.mem.Allocator, main: tuft_window.Handle, sink: Sink) !*Win32 {
+/// Becomes ImGui's platform backend for the current context. `icon` is an icon resource in this
+/// module, for its windows. Render thread.
+pub fn create(allocator: std.mem.Allocator, main: tuft_window.Handle, sink: Sink, icon: ?[]const u8) !*Win32 {
     const user32 = win.GetModuleHandleW(std.unicode.utf8ToUtf16LeStringLiteral("user32.dll")) orelse return error.User32NotLoaded;
     const def_window_proc = win.GetProcAddress(user32, "DefWindowProcW") orelse return error.DefWindowProcNotFound;
 
@@ -100,6 +103,8 @@ pub fn create(allocator: std.mem.Allocator, main: tuft_window.Handle, sink: Sink
         .instance = win.GetModuleHandleW(null),
     };
     self.tasks.wake = .{ .ctx = self, .func = wake };
+    if (icon) |name| self.loadIcons(name);
+    errdefer self.freeIcons();
 
     const class: win.WNDCLASSEXW = .{
         // Own DC for OpenGL
@@ -145,6 +150,7 @@ pub fn create(allocator: std.mem.Allocator, main: tuft_window.Handle, sink: Sink
 pub fn destroy(self: *Win32) void {
     tuft_imgui_destroy_viewport_windows();
     self.stopThread();
+    self.freeIcons();
 
     const pio = c.ImGui_GetPlatformIO();
     pio.*.Platform_CreateWindow = null;
@@ -354,6 +360,26 @@ fn startThread(self: *Win32) !void {
         return error.CreateWindowFailed;
     }
     self.thread = thread;
+}
+
+fn loadIcons(self: *Win32, name: []const u8) void {
+    var buf: [64:0]u16 = undefined;
+    const len = std.unicode.utf8ToUtf16Le(&buf, name[0..@min(name.len, buf.len)]) catch return;
+    buf[len] = 0;
+    // From this module, not the game's
+    const module: ?win.HINSTANCE = @ptrFromInt(sys.module.selfBase());
+    const sizes = [2][2]i32{ .{ win.SM_CXICON, win.SM_CYICON }, .{ win.SM_CXSMICON, win.SM_CYSMICON } };
+    for (&self.icons, sizes) |*slot, size| {
+        slot.* = win.LoadImageW(module, buf[0..len :0], win.IMAGE_ICON, win.GetSystemMetrics(size[0]), win.GetSystemMetrics(size[1]), 0);
+    }
+}
+
+/// Once its windows are gone.
+fn freeIcons(self: *Win32) void {
+    for (&self.icons) |*slot| {
+        if (slot.*) |i| _ = win.DestroyIcon(i);
+        slot.* = null;
+    }
 }
 
 fn stopThread(self: *Win32) void {
@@ -644,6 +670,8 @@ fn makeWindow(data: *ViewportData) void {
     ) orelse return;
     _ = win.SetWindowLongPtrW(hwnd, win.GWLP_USERDATA, @bitCast(@intFromPtr(data)));
     _ = win.SetWindowLongPtrW(hwnd, win.GWLP_WNDPROC, @bitCast(@intFromPtr(&wndProc)));
+    if (data.win32.icons[0]) |big| _ = win.SendMessageW(hwnd, win.WM_SETICON, win.ICON_BIG, @bitCast(@intFromPtr(big)));
+    if (data.win32.icons[1]) |small| _ = win.SendMessageW(hwnd, win.WM_SETICON, win.ICON_SMALL, @bitCast(@intFromPtr(small)));
     data.have = want;
     data.have.visible = false;
     data.have.title_len = 0;

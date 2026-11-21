@@ -21,6 +21,8 @@ pub const Options = struct {
     viewports: bool = false,
     /// Null drops it.
     viewport_input: ?Win32.Sink = null,
+    /// An icon resource in this module, for windows dragged out of the game.
+    viewport_icon: ?[]const u8 = null,
     /// Runs on the first frame with the context current.
     setup: ?Setup = null,
     /// Gets frame captures, on the render thread.
@@ -80,7 +82,7 @@ pub fn prepare(self: *Host, frame: *const gfx.Frame, monitors_changed: bool) Err
         c.ImGui_SetCurrentContext(context);
         if (self.options.setup) |s| s.func(s.ctx, frame);
         if (self.options.viewports) {
-            self.platform = Win32.create(self.allocator, frame.window, self.options.viewport_input orelse ignored) catch |err| blk: {
+            self.platform = Win32.create(self.allocator, frame.window, self.options.viewport_input orelse ignored, self.options.viewport_icon) catch |err| blk: {
                 log.warn("ImGui windows can't leave the game: {t}", .{err});
                 break :blk null;
             };
