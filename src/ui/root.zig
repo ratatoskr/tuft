@@ -1029,6 +1029,7 @@ pub const Commands = @import("Commands.zig");
 pub const commands = Commands.begin;
 pub const Reorder = @import("Reorder.zig");
 pub const Outline = @import("Outline.zig");
+pub const Prompt = @import("Prompt.zig");
 pub const Confirm = @import("Confirm.zig");
 pub const Split = @import("Split.zig");
 /// ImGuizmo widgets, from the host's ImGui.
@@ -1810,6 +1811,7 @@ test pascalCase {
 test {
     _ = Reorder;
     _ = Outline;
+    _ = Prompt;
     _ = Toasts;
     _ = chord_input;
     _ = plot;
