@@ -1,7 +1,7 @@
 .{
     .name = .tuft,
     .version = "0.0.0",
-    .minimum_zig_version = "0.18.0-dev.1244+b5ffcbd70",
+    .minimum_zig_version = "0.18.0-dev.1260+833623422",
     .fingerprint = 0xf3ec3b68ca38da0c,
     .paths = .{
         "src",
