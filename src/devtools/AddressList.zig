@@ -1623,6 +1623,10 @@ pub const Bound = struct {
     chord: Chord,
     /// Like `Mira: set 999999`.
     label: []const u8,
+    /// The entry's name, like `Mira`.
+    entry: []const u8,
+    /// What it does, like `set 999999`.
+    does: []const u8,
     /// The entry's id, else its name, to keep a rebind under.
     owner: []const u8,
 };
@@ -1636,11 +1640,16 @@ pub fn boundHotkeys(self: *const AddressList, arena: std.mem.Allocator) ![]Bound
             const name = n.name.get();
             const id = std.mem.trim(u8, n.id.get(), " ");
             var buf: [160]u8 = undefined;
+            const entry = if (name.len > 0) name else "(no description)";
+            const label = try arena.dupe(u8, hotkeyLabel(&buf, entry, h.action, h.value.get()));
+            const does = if (std.mem.startsWith(u8, label, entry) and label.len > entry.len + 2) label[entry.len + 2 ..] else label;
             try out.append(arena, .{
                 .node = n.key,
                 .index = @intCast(k),
                 .chord = chord,
-                .label = try arena.dupe(u8, hotkeyLabel(&buf, if (name.len > 0) name else "(no description)", h.action, h.value.get())),
+                .label = label,
+                .entry = try arena.dupe(u8, entry),
+                .does = does,
                 .owner = try arena.dupe(u8, if (id.len > 0) id else name),
             });
         }
