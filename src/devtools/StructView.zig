@@ -719,6 +719,24 @@ const tests = struct {
         try testing.expect(!rowNamed(&view, "target").?.expandable);
     }
 
+    test "an array as long as a field" {
+        var parsed = try salamander.parse(testing.allocator, "struct Bag { u16 count; [8] u32[count] xs; }", test_options, null);
+        defer parsed.deinit();
+        var view: StructView = .{ .allocator = testing.allocator };
+        defer view.deinit();
+        view.setSchema(&parsed.schema);
+        _ = view.show("Bag");
+        var bytes: [8 + 4 * 4]u8 align(8) = @splat(0);
+        std.mem.writeInt(u16, bytes[0..2], 3, .little);
+        view.goTo(@intFromPtr(&bytes));
+        view.build();
+        view.setOpen(rowNamed(&view, "xs").?, true);
+        view.build();
+        var elements: usize = 0;
+        for (view.rows.items) |r| elements += @intFromBool(r.kind == .element);
+        try testing.expectEqual(3, elements);
+    }
+
     test "mapped values" {
         var parsed = try salamander.parse(testing.allocator, source, test_options, null);
         defer parsed.deinit();

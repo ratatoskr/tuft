@@ -188,6 +188,19 @@ const Dump = struct {
     }
 };
 
+test "an array as long as a field" {
+    var p = try parsed("struct Bag { u16 count; [8] u32[count] xs; }", @sizeOf(usize));
+    defer p.deinit();
+    var bytes: [8 + 4 * 4]u8 align(8) = @splat(0);
+    std.mem.writeInt(u16, bytes[0..2], 3, .little);
+    for (0..4) |i| std.mem.writeInt(u32, bytes[8 + i * 4 ..][0..4], @intCast(10 + i), .little);
+    const bag = Ref.of(&p.schema, "Bag", @intFromPtr(&bytes));
+    try testing.expectEqual(3, bag.field("xs").type.array.len);
+    try testing.expectEqual(12, (try bag.path("xs[2]").load()).uint);
+    // The fourth is there, but past the count
+    try testing.expectError(error.OutOfBounds, bag.path("xs[3]").load());
+}
+
 test "refs in 32-bit memory" {
     var p = try parsed("struct Node { u16 value; Node* next; cstring name; }", 4);
     defer p.deinit();

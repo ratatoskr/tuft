@@ -5,6 +5,7 @@ const Ref = @This();
 const std = @import("std");
 
 const Address = @import("tuft_mem").Address;
+const Memory = @import("tuft_mem").Memory;
 const Schema = @import("salamander_schema").Schema;
 const sigs = @import("sigs.zig");
 const Prim = Schema.Prim;
@@ -152,7 +153,7 @@ pub fn field(self: Ref, name: []const u8) Ref {
     switch (t.kind) {
         .@"struct", .@"union" => {
             const f = self.schema.findField(t, name) orelse return r.failed(error.NoSuchField);
-            return r.moved(f.type, addr + f.offset);
+            return r.moved(sizedField(self.schema, t, f, r.address.memory, addr), addr + f.offset);
         },
         .bitfield => |bf| {
             const b = Schema.findBits(t, name) orelse return r.failed(error.NoSuchField);
@@ -167,6 +168,27 @@ pub fn field(self: Ref, name: []const u8) Ref {
         else => return r.failed(error.NotAStruct),
     }
 }
+
+/// A `T[count]` array is as long as `count` says now, read from the struct at `base`. Anything
+/// else is as it's written. One whose count can't be read is empty.
+pub fn sizedField(schema: *const Schema, in: *const Schema.Type, f: Schema.Field, memory: Memory, base: usize) Type {
+    if (f.type != .array) return f.type;
+    const a = f.type.array;
+    const name = a.count orelse return f.type;
+    const empty: Type = .{ .array = a.sized(0) };
+    const count = schema.findField(in, name) orelse return empty;
+    const p = if (count.type == .prim) count.type.prim else return empty;
+    const n = p.size(schema.pointer_size);
+    if (n > 8) return empty;
+    var bytes: [8]u8 = @splat(0);
+    memory.read(base + count.offset, bytes[0..n]) catch return empty;
+    const raw = std.mem.readInt(u64, &bytes, .little);
+    const len: u64 = if (p.isSigned()) @intCast(@max(signExtend(raw, n), 0)) else raw;
+    return .{ .array = a.sized(@intCast(@min(len, max_count))) };
+}
+
+/// A count read as more than this is this.
+pub const max_count = 1 << 20;
 
 pub fn deref(self: Ref) Ref {
     if (self.bits != null) return self.failed(error.NotAPointer);

@@ -167,7 +167,9 @@ pub fn addStruct(self: *StructRows, t: *const Schema.Type, at: ?usize, depth: u8
             if (!self.addGap(t, at, cursor, f.offset, depth, parent)) return;
         }
         const address = if (at) |a| a + f.offset else null;
-        if (!self.addValue(.{ .id = fieldId(parent, f.name), .parent = parent, .depth = depth, .kind = .field, .offset = f.offset, .address = address, .name = f.name, .type = f.type, .owner = m.owner })) return;
+        // A `T[count]` array, as long as its count says now
+        const ty = if (at) |a| Ref.sizedField(schema, m.owner, f, self.memory, a) else f.type;
+        if (!self.addValue(.{ .id = fieldId(parent, f.name), .parent = parent, .depth = depth, .kind = .field, .offset = f.offset, .address = address, .name = f.name, .type = ty, .owner = m.owner })) return;
         const size = schema.sizeOf(f.type) orelse 0;
         cursor = @max(cursor, f.offset + size);
     }
