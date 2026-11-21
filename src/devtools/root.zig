@@ -55,6 +55,8 @@ pub const Keys = struct {
     expand: ?ui.Chord = .{ .key = .right },
     collapse: ?ui.Chord = .{ .key = .left },
     toggle_search: ?ui.Chord = .{ .key = .f, .ctrl = true, .shift = true },
+    move_up: ?ui.Chord = .{ .key = .up, .alt = true },
+    move_down: ?ui.Chord = .{ .key = .down, .alt = true },
 };
 
 /// Set before drawing.

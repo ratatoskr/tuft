@@ -75,7 +75,8 @@ edit: Text(max_text) = .{},
 focus_edit: bool = false,
 problem: ?root.Problem = null,
 dirty: bool = false,
-pending_move: ?Move = null,
+/// Dragging and moving entries about.
+reorder: ui.Reorder = .{ .kind = drag_kind },
 /// Fields and elements held inside typed entries and arrays, and whole ones. Not saved.
 holds: std.ArrayList(Hold) = .empty,
 /// Typed since the edit started, so the choices are filtered by it.
@@ -236,6 +237,8 @@ const max_path = 160;
 const Shown = struct {
     node: u32,
     row: u32 = no_row,
+    /// The key of the group a node's in, 0 at the top.
+    parent: u64 = 0,
 };
 
 /// The saved part of an entry. Hand-edited files get made to fit.
@@ -288,6 +291,7 @@ pub fn deinit(self: *AddressList) void {
     self.matches.deinit(self.allocator);
     self.allocator.free(self.choices_text);
     self.hotkey_picked.deinit();
+    self.reorder.deinit();
 }
 
 fn freeNode(self: *AddressList, node: *Node) void {
@@ -566,26 +570,15 @@ pub fn moveInto(self: *AddressList, i: usize, target: ?usize) !void {
     self.dirty = true;
 }
 
-pub const Place = enum {
-    before,
-    /// For an open group that's its first entry, since that's what's drawn under it.
-    after,
-    into,
-    /// `moveTo` ignores the entry for this one.
-    end,
+pub const Place = ui.Reorder.Place;
 
-    pub fn at(y: f32, height: f32, group: bool) Place {
-        if (group and y > height * 0.25 and y < height * 0.75) return .into;
-        return if (y < height * 0.5) .before else .after;
-    }
-};
-
-/// Moves every picked entry if `dragged` is picked, else just it.
+/// Moves every picked entry if `dragged` is picked, else just it. `.after` a group goes after
+/// what's in it too.
 pub fn moveTo(self: *AddressList, dragged: u64, key: u64, place: Place) !void {
     const gpa = self.allocator;
     const nodes = self.nodes.items;
     const target = if (place == .end) null else (self.indexOfKey(key) orelse return);
-    if (place == .into and !nodes[target.?].group) return error.NotAGroup;
+    if ((place == .into or place == .first) and !nodes[target.?].group) return error.NotAGroup;
 
     var roots: std.ArrayList(usize) = .empty;
     defer roots.deinit(gpa);
@@ -597,7 +590,7 @@ pub fn moveTo(self: *AddressList, dragged: u64, key: u64, place: Place) !void {
             const end = self.subtreeEnd(i);
             if (target) |t| if (t >= i and t < end) {
                 // Next to itself is where it is already, and into itself can't be
-                if (t == i and place != .into) continue;
+                if (t == i and place != .into and place != .first) continue;
                 return;
             };
             try roots.append(gpa, i);
@@ -639,12 +632,14 @@ pub fn moveTo(self: *AddressList, dragged: u64, key: u64, place: Place) !void {
                 at = t;
                 depth = node.depth;
             },
-            .after => if (node.group and node.expanded) {
-                at = t + 1;
-                depth = node.depth +| 1;
-            } else {
+            .after => {
                 at = self.subtreeEnd(t);
                 depth = node.depth;
+            },
+            .first => {
+                node.expanded = true;
+                at = t + 1;
+                depth = node.depth +| 1;
             },
             .into => {
                 node.expanded = true;
@@ -1765,6 +1760,9 @@ pub fn commands(self: *AddressList, menu: *ui.Commands) void {
     }
     menu.separator();
     if (menu.item(.{ .label = "Delete", .chord = keys.delete, .enabled = any, .tooltip = "And what's in picked groups" })) self.removePicked();
+    menu.separator();
+    const focused = if (self.picked.focused()) |key| if (self.indexOfKey(key) != null) key else null else null;
+    self.reorder.commands(menu, focused, .{ .up = keys.move_up, .down = keys.move_down });
 }
 
 fn allPickedHeld(self: *const AddressList) bool {
@@ -2059,6 +2057,7 @@ fn drawTable(self: *AddressList, height: f32) void {
     ui.tableHeaders();
 
     self.build();
+    self.noteRows();
     {
         var picking = self.picked.begin(self.visible.items.len, Visible{ .list = self }, .{});
         defer picking.end();
@@ -2070,62 +2069,48 @@ fn drawTable(self: *AddressList, height: f32) void {
             const shown = self.visible.items[line];
             if (shown.node >= self.nodes.items.len) continue;
             if (shown.row == no_row) {
-                self.drawRow(&picking, line, shown.node, &self.nodes.items[shown.node]);
+                self.drawRow(&picking, line, shown, &self.nodes.items[shown.node]);
             } else if (shown.row < self.rows.items.len) {
                 self.drawInside(&picking, line, shown.row);
             }
         }
     }
-    if (ui.dragging(drag_kind) != null) self.drawDropEnd();
+    if (self.reorder.dragging()) self.drawDropEnd();
 }
 
 const drag_kind = "tuft.address_list";
 
-const Move = struct { dragged: u64, key: u64, place: Place };
-
-fn applyMove(self: *AddressList) void {
-    const move = self.pending_move orelse return;
-    self.pending_move = null;
-    self.moveTo(move.dragged, move.key, move.place) catch |err| self.fail("move it", err);
+/// Every node row, with its group, so moves go past ones scrolled off.
+fn noteRows(self: *AddressList) void {
+    self.reorder.begin();
+    var parents: [256]u64 = undefined;
+    for (self.visible.items) |*shown| {
+        if (shown.row != no_row) continue;
+        const node = &self.nodes.items[shown.node];
+        shown.parent = if (node.depth == 0) 0 else parents[node.depth - 1];
+        parents[node.depth] = node.key;
+        self.reorder.note(node.key, shown.parent);
+    }
 }
 
-fn dragAndDrop(self: *AddressList, node: *const Node) void {
-    if (ui.dragSource(drag_kind, std.mem.asBytes(&node.key))) |source| {
-        defer source.end();
-        const count = if (self.picked.contains(node.key)) self.picked.count() else 1;
-        const name = node.name.get();
-        if (count > 1) ui.text("{d} entries", .{count}) else ui.text("{s}", .{if (name.len == 0) "(no description)" else name});
-    }
-    const drop = ui.dropTarget(drag_kind) orelse return;
-    const dragged = drop.as(u64) orelse return;
-    const min = ui.getItemRectMin();
-    const max = ui.getItemRectMax();
-    const place = Place.at(ui.getMousePos()[1] - min[1], max[1] - min[1], node.group);
-    const lines = ui.getWindowDrawList();
-    lines.pushClipRectFullScreen();
-    defer lines.popClipRect();
-    const colour = ui.getColorU32(.drag_drop_target);
-    switch (place) {
-        .before => lines.addLine(min, .{ max[0], min[1] }, colour, 2),
-        .after => lines.addLine(.{ min[0], max[1] }, max, colour, 2),
-        .into, .end => lines.addRect(min, max, colour, 0, 2),
-    }
-    if (drop.delivered) self.pending_move = .{ .dragged = dragged, .key = node.key, .place = place };
+fn applyMove(self: *AddressList) void {
+    const move = self.reorder.take() orelse return;
+    self.moveTo(move.dragged, move.target, move.place) catch |err| self.fail("move it", err);
+}
+
+fn dragAndDrop(self: *AddressList, node: *const Node, parent: u64) void {
+    const count = if (self.picked.contains(node.key)) self.picked.count() else 1;
+    const name = node.name.get();
+    var buf: [32]u8 = undefined;
+    const label = if (count > 1) std.fmt.bufPrint(&buf, "{d} entries", .{count}) catch "" else if (name.len == 0) "(no description)" else name;
+    self.reorder.item(.{ .id = node.key, .parent = parent, .group = node.group, .open = node.group and node.expanded, .label = label });
 }
 
 fn drawDropEnd(self: *AddressList) void {
     ui.tableNextRow();
     _ = ui.tableNextColumn();
     _ = ui.selectableWith("##drop_end", false, .{ .span_columns = true, .allow_overlap = true });
-    if (ui.dropTarget(drag_kind)) |drop| {
-        const lines = ui.getWindowDrawList();
-        lines.pushClipRectFullScreen();
-        defer lines.popClipRect();
-        lines.addRect(ui.getItemRectMin(), ui.getItemRectMax(), ui.getColorU32(.drag_drop_target), 0, 2);
-        if (drop.delivered) if (drop.as(u64)) |dragged| {
-            self.pending_move = .{ .dragged = dragged, .key = 0, .place = .end };
-        };
-    }
+    self.reorder.endTarget();
     _ = ui.tableNextColumn();
     ui.textDisabled("Drop here to put it at the end, out of any group", .{});
 }
@@ -2140,7 +2125,8 @@ const Visible = struct {
     }
 };
 
-fn drawRow(self: *AddressList, picking: anytype, line: usize, i: usize, node: *Node) void {
+fn drawRow(self: *AddressList, picking: anytype, line: usize, shown: Shown, node: *Node) void {
+    const i: usize = shown.node;
     const scope = ui.id(@as(i32, @bitCast(@as(u32, @truncate(node.key)))));
     defer scope.end();
     ui.tableNextRow();
@@ -2148,7 +2134,7 @@ fn drawRow(self: *AddressList, picking: anytype, line: usize, i: usize, node: *N
     _ = ui.tableNextColumn();
     // The whole row picks it, the checkbox on top still gets its clicks
     _ = picking.row(line, "##row");
-    self.dragAndDrop(node);
+    self.dragAndDrop(node, shown.parent);
     ui.sameLine();
     var held = self.isHeld(i);
     if (ui.checkbox("##hold", &held)) self.setHeld(i, held);
@@ -2164,12 +2150,11 @@ fn drawRow(self: *AddressList, picking: anytype, line: usize, i: usize, node: *N
     if (indented) ui.indent(@as(f32, @floatFromInt(node.depth)) * 14);
     defer if (indented) ui.unindent(@as(f32, @floatFromInt(node.depth)) * 14);
     if (self.opens(i)) {
-        if (ui.smallButton(if (node.expanded) "-" else "+")) {
+        if (ui.Outline.arrow(node.expanded)) {
             node.expanded = !node.expanded;
             self.dirty = true;
         }
-        ui.sameLine();
-    }
+    } else ui.Outline.noArrow();
     const name = node.name.get();
     if (name.len == 0) ui.textDisabled("(no description)", .{}) else ui.text("{s}", .{name});
     const id = node.id.get();
@@ -2324,9 +2309,8 @@ fn drawInside(self: *AddressList, picking: anytype, line: usize, k: usize) void 
     if (row.depth > 0) ui.indent(indent);
     defer if (row.depth > 0) ui.unindent(indent);
     if (row.expandable) {
-        if (ui.smallButton(if (row.expanded) "-" else "+")) self.open.set(self.allocator, row, !row.expanded);
-        ui.sameLine();
-    }
+        if (ui.Outline.arrow(row.expanded)) self.open.set(self.allocator, row, !row.expanded);
+    } else ui.Outline.noArrow();
     switch (row.kind) {
         .element => ui.text("[{d}]", .{row.index}),
         .more => {
@@ -2825,8 +2809,12 @@ const tests = struct {
 
         try l.moveTo(named(&l, "d"), named(&l, "a"), .before);
         try testing.expectEqualStrings("0G 1d 1a 1b 0c ", names(&l, &buf));
-        try l.moveTo(named(&l, "c"), named(&l, "G"), .after);
+        try l.moveTo(named(&l, "c"), named(&l, "G"), .first);
         try testing.expectEqualStrings("0G 1c 1d 1a 1b ", names(&l, &buf));
+        // After a group is after what's in it
+        try l.moveTo(named(&l, "c"), named(&l, "G"), .after);
+        try testing.expectEqualStrings("0G 1d 1a 1b 0c ", names(&l, &buf));
+        try l.moveTo(named(&l, "c"), named(&l, "G"), .first);
         l.picked.clear();
         l.picked.add(named(&l, "b"));
         l.picked.add(named(&l, "d"));

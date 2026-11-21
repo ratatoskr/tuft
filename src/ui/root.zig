@@ -496,21 +496,29 @@ pub fn textColored(color: Color, comptime fmt: []const u8, args: anytype) void {
 }
 
 /// `color` for `col` until `end`, like an error line's text. Takes ImGui's packed ABGR `u32`, a
-/// `Color` or an `ImVec4`. Null changes nothing.
-pub fn withColor(col: c.ImGuiCol, color: anytype) StyleColors {
+/// `Color` or an `ImVec4`. Null changes nothing. `col` is a `Col` or ImGui's own number for one.
+pub fn withColor(col: anytype, color: anytype) StyleColors {
     const T = @TypeOf(color);
     if (@typeInfo(T) == .optional) return if (color) |v| withColor(col, v) else .{ .n = 0 };
     if (T == u32 or T == comptime_int) {
-        raw("ImGui_PushStyleColor")(col, color);
+        raw("ImGui_PushStyleColor")(colIndex(col), color);
     } else if (T == c.ImVec4) {
-        raw("ImGui_PushStyleColorImVec4")(col, color);
-    } else raw("ImGui_PushStyleColorImVec4")(col, vec4(color));
+        raw("ImGui_PushStyleColorImVec4")(colIndex(col), color);
+    } else raw("ImGui_PushStyleColorImVec4")(colIndex(col), vec4(color));
     return .{};
 }
 
-/// The style's own `from` colour for `col` until `end`, like `ButtonActive` for a button that's lit.
-pub fn withStyleColor(col: c.ImGuiCol, from: c.ImGuiCol) StyleColors {
-    return withColor(col, raw("ImGui_GetStyleColorVec4")(from).*);
+/// The style's own `from` colour for `col` until `end`, like `button_active` for a button that's lit.
+pub fn withStyleColor(col: anytype, from: anytype) StyleColors {
+    return withColor(col, raw("ImGui_GetStyleColorVec4")(colIndex(from)).*);
+}
+
+fn colIndex(col: anytype) c.ImGuiCol {
+    return switch (@typeInfo(@TypeOf(col))) {
+        .enum_literal => @backingInt(@as(Col, col)),
+        .@"enum" => @backingInt(col),
+        else => @intCast(col),
+    };
 }
 
 pub const StyleColors = struct {
@@ -1019,6 +1027,8 @@ pub const Chord = struct {
 pub const Selection = @import("Selection.zig");
 pub const Commands = @import("Commands.zig");
 pub const commands = Commands.begin;
+pub const Reorder = @import("Reorder.zig");
+pub const Outline = @import("Outline.zig");
 pub const Confirm = @import("Confirm.zig");
 pub const Split = @import("Split.zig");
 /// ImGuizmo widgets, from the host's ImGui.
@@ -1253,12 +1263,311 @@ pub fn invisibleButton(id_: [:0]const u8, size: Vec2) bool {
     return raw("ImGui_InvisibleButton")(str(id_), vec2(size), 0);
 }
 
+pub const InvisibleButtonOptions = struct {
+    /// Right-clicks press it too, not just left ones.
+    right: bool = false,
+};
+
+pub fn invisibleButtonWith(id_: [:0]const u8, size: Vec2, options: InvisibleButtonOptions) bool {
+    var f: c.ImGuiButtonFlags = c.ImGuiButtonFlags_MouseButtonLeft;
+    if (options.right) f |= c.ImGuiButtonFlags_MouseButtonRight;
+    return raw("ImGui_InvisibleButton")(str(id_), vec2(size), f);
+}
+
+/// What a widget labelled `label` here gets as its id.
+pub fn getId(label: [:0]const u8) c.ImGuiID {
+    return raw("ImGui_GetID")(str(label));
+}
+
+/// Opens or shuts the next tree node.
+pub fn setNextItemOpen(open: bool, when: Cond) void {
+    raw("ImGui_SetNextItemOpen")(open, cond(when));
+}
+
+/// Text as it is, with no formatting and no length limit.
+pub fn textUnformatted(text_: []const u8) void {
+    raw("ImGui_TextUnformattedEx")(@ptrCast(text_.ptr), @ptrCast(text_.ptr + text_.len));
+}
+
+/// Text that looks like a link. True if clicked.
+pub fn textLink(label: [:0]const u8) bool {
+    return raw("ImGui_TextLink")(str(label));
+}
+
+pub const SliderOptions = struct {
+    /// printf style, like "%.2f". Null is the type's usual.
+    format: ?[:0]const u8 = null,
+    /// Ctrl+click typing can't go past the ends either.
+    clamp: bool = false,
+};
+
+/// For an `f32`, `f64`, `i32`, `u32`, `i64` or `u64`.
+pub fn sliderWith(label: [:0]const u8, value: anytype, min: std.meta.Child(@TypeOf(value)), max: std.meta.Child(@TypeOf(value)), options: SliderOptions) bool {
+    const T = std.meta.Child(@TypeOf(value));
+    const lo: T = min;
+    const hi: T = max;
+    const fmt: [*c]const u8 = if (options.format) |f| str(f) else null;
+    const f: c.ImGuiSliderFlags = if (options.clamp) c.ImGuiSliderFlags_AlwaysClamp else 0;
+    return raw("ImGui_SliderScalarEx")(str(label), dataType(T), @ptrCast(value), @ptrCast(&lo), @ptrCast(&hi), fmt, f);
+}
+
+pub const InputNumberOptions = struct {
+    /// printf style, like "%.2f". Null is the type's usual.
+    format: ?[:0]const u8 = null,
+    /// What the - and + buttons add. 0 has no buttons.
+    step: f64 = 0,
+    /// What they add with Ctrl held.
+    step_fast: f64 = 0,
+    /// Only takes hex digits.
+    hex: bool = false,
+};
+
+/// A number box for an `f32`, `f64`, `i32`, `u32`, `i64` or `u64`.
+pub fn inputNumber(label: [:0]const u8, value: anytype, options: InputNumberOptions) bool {
+    const T = std.meta.Child(@TypeOf(value));
+    const step: T = std.math.lossyCast(T, options.step);
+    const fast: T = std.math.lossyCast(T, options.step_fast);
+    const fmt: [*c]const u8 = if (options.format) |f| str(f) else null;
+    const f: c.ImGuiInputTextFlags = if (options.hex) c.ImGuiInputTextFlags_CharsHexadecimal else 0;
+    return raw("ImGui_InputScalarEx")(
+        str(label),
+        dataType(T),
+        @ptrCast(value),
+        if (options.step > 0) @ptrCast(&step) else null,
+        if (options.step_fast > 0) @ptrCast(&fast) else null,
+        fmt,
+        f,
+    );
+}
+
+fn dataType(comptime T: type) c.ImGuiDataType {
+    return switch (T) {
+        f32 => c.ImGuiDataType_Float,
+        f64 => c.ImGuiDataType_Double,
+        i32 => c.ImGuiDataType_S32,
+        u32 => c.ImGuiDataType_U32,
+        i64 => c.ImGuiDataType_S64,
+        u64 => c.ImGuiDataType_U64,
+        else => @compileError("not a number ImGui edits: " ++ @typeName(T)),
+    };
+}
+
+/// The previous widget, by `which` button, this frame.
+pub fn isItemClicked(which: MouseButton) bool {
+    return raw("ImGui_IsItemClickedEx")(@backingInt(which));
+}
+
+/// Takes no input, just room. Pixels.
+pub fn dummy(size: Vec2) void {
+    raw("ImGui_Dummy")(vec2(size));
+}
+
+pub fn newLine() void {
+    raw("ImGui_NewLine")();
+}
+
+pub fn setCursorScreenPos(pos: Vec2) void {
+    raw("ImGui_SetCursorScreenPos")(vec2(pos));
+}
+
+/// The current window's, in pixels.
+pub fn getWindowSize() Vec2 {
+    return fromVec2(raw("ImGui_GetWindowSize")());
+}
+
+/// Its first frame, or first since it was hidden.
+pub fn isWindowAppearing() bool {
+    return raw("ImGui_IsWindowAppearing")();
+}
+
+/// Any window has the keyboard, not just this one.
+pub fn isAnyWindowFocused() bool {
+    return raw("ImGui_IsWindowFocused")(c.ImGuiFocusedFlags_AnyWindow);
+}
+
+/// This window or one inside it has the keyboard.
+pub fn isWindowOrChildFocused() bool {
+    return raw("ImGui_IsWindowFocused")(c.ImGuiFocusedFlags_RootAndChildWindows);
+}
+
+/// The previous widget just stopped being edited, and was changed.
+pub fn isItemDeactivatedAfterEdit() bool {
+    return raw("ImGui_IsItemDeactivatedAfterEdit")();
+}
+
+/// The previous widget gets the keyboard when its window first shows, like a list's picked item.
+pub fn setItemDefaultFocus() void {
+    raw("ImGui_SetItemDefaultFocus")();
+}
+
+pub const Viewport = struct {
+    id: c.ImGuiID,
+    pos: Vec2,
+    size: Vec2,
+    /// Without the OS's task bar and the like.
+    work_pos: Vec2,
+    work_size: Vec2,
+
+    pub fn centre(self: Viewport) Vec2 {
+        return .{ self.work_pos[0] + self.work_size[0] / 2, self.work_pos[1] + self.work_size[1] / 2 };
+    }
+};
+
+/// The game's window, or the app's.
+pub fn mainViewport() Viewport {
+    const v = raw("ImGui_GetMainViewport")();
+    return .{ .id = v.*.ID, .pos = fromVec2(v.*.Pos), .size = fromVec2(v.*.Size), .work_pos = fromVec2(v.*.WorkPos), .work_size = fromVec2(v.*.WorkSize) };
+}
+
+/// Pixels. `pivot` is which part of the window goes at `pos`, like `.{ 0.5, 0.5 }` for its middle.
+pub fn setNextWindowPos(pos: Vec2, when: Cond, pivot: Vec2) void {
+    raw("ImGui_SetNextWindowPosEx")(vec2(pos), cond(when), vec2(pivot));
+}
+
+/// Pixels.
+pub fn setNextWindowSize(size: Vec2, when: Cond) void {
+    raw("ImGui_SetNextWindowSize")(vec2(size), cond(when));
+}
+
+/// Keeps the next window in the main viewport, not a window of its own.
+pub fn setNextWindowOnMainViewport() void {
+    raw("ImGui_SetNextWindowViewport")(raw("ImGui_GetMainViewport")().*.ID);
+}
+
+pub fn setNextWindowBgAlpha(alpha: f32) void {
+    raw("ImGui_SetNextWindowBgAlpha")(alpha);
+}
+
+/// Opens the popup called `id` the next time it's begun, where the mouse is.
+pub fn openPopup(id_: [:0]const u8) void {
+    _ = raw("ImGui_OpenPopup")(str(id_), 0);
+}
+
+/// Null while it's shut.
+pub fn popup(id_: [:0]const u8) ?Popup {
+    return if (raw("ImGui_BeginPopup")(str(id_), 0)) .{} else null;
+}
+
+/// Opened by right-clicking the previous widget. Null while it's shut.
+pub fn contextMenu(id_: [:0]const u8) ?Popup {
+    return if (raw("ImGui_BeginPopupContextItemEx")(str(id_), c.ImGuiPopupFlags_MouseButtonRight)) .{} else null;
+}
+
+pub const ModalOptions = struct {
+    /// Shows a close button that clears this.
+    open: ?*bool = null,
+    /// Fits what's in it. Else size it first with `setNextWindowSize`.
+    auto_resize: bool = true,
+    /// Keeps where it was moved to in the ini, for next time.
+    remember: bool = false,
+};
+
+/// Over everything, until it's closed. Opened with `openPopup`. Null while it's shut.
+pub fn modal(title: [:0]const u8, options: ModalOptions) ?Popup {
+    var f: c.ImGuiWindowFlags = if (options.remember) 0 else c.ImGuiWindowFlags_NoSavedSettings;
+    if (options.auto_resize) f |= c.ImGuiWindowFlags_AlwaysAutoResize;
+    return if (raw("ImGui_BeginPopupModal")(str(title), options.open, f)) .{} else null;
+}
+
+pub const Popup = struct {
+    pub fn end(_: Popup) void {
+        raw("ImGui_EndPopup")();
+    }
+};
+
+/// The popup being drawn.
+pub fn closePopup() void {
+    raw("ImGui_CloseCurrentPopup")();
+}
+
+/// Any popup, menu or modal at all.
+pub fn isAnyPopupOpen() bool {
+    return raw("ImGui_IsPopupOpen")(null, c.ImGuiPopupFlags_AnyPopupId | c.ImGuiPopupFlags_AnyPopupLevel);
+}
+
+/// Pixels. Ones left null stay as they are.
+pub const StyleVars = struct {
+    alpha: ?f32 = null,
+    window_rounding: ?f32 = null,
+    window_padding: ?Vec2 = null,
+    frame_padding: ?Vec2 = null,
+    item_spacing: ?Vec2 = null,
+};
+
+/// Until `end`.
+pub fn styleVars(vars: StyleVars) StyleScope {
+    var n: i32 = 0;
+    if (vars.alpha) |v| {
+        raw("ImGui_PushStyleVar")(c.ImGuiStyleVar_Alpha, v);
+        n += 1;
+    }
+    if (vars.window_rounding) |v| {
+        raw("ImGui_PushStyleVar")(c.ImGuiStyleVar_WindowRounding, v);
+        n += 1;
+    }
+    if (vars.window_padding) |v| {
+        raw("ImGui_PushStyleVarImVec2")(c.ImGuiStyleVar_WindowPadding, vec2(v));
+        n += 1;
+    }
+    if (vars.frame_padding) |v| {
+        raw("ImGui_PushStyleVarImVec2")(c.ImGuiStyleVar_FramePadding, vec2(v));
+        n += 1;
+    }
+    if (vars.item_spacing) |v| {
+        raw("ImGui_PushStyleVarImVec2")(c.ImGuiStyleVar_ItemSpacing, vec2(v));
+        n += 1;
+    }
+    return .{ .n = n };
+}
+
+pub const StyleScope = struct {
+    n: i32,
+
+    pub fn end(self: StyleScope) void {
+        if (self.n > 0) raw("ImGui_PopStyleVarEx")(self.n);
+    }
+};
+
+/// A box that's neither ticked nor not, for "some of what's in it is on". Until `end`.
+pub fn mixedValue(on: bool) ItemFlagScope {
+    if (on) raw("ImGui_PushItemFlag")(c.ImGuiItemFlags_MixedValue, true);
+    return .{ .pushed = on };
+}
+
+pub const ItemFlagScope = struct {
+    pushed: bool,
+
+    pub fn end(self: ItemFlagScope) void {
+        if (self.pushed) raw("ImGui_PopItemFlag")();
+    }
+};
+
+/// Text wraps at `x` pixels into the window, or the window's edge for 0. Until `end`.
+pub fn wrapAt(x: f32) WrapScope {
+    raw("ImGui_PushTextWrapPos")(x);
+    return .{};
+}
+
+pub const WrapScope = struct {
+    pub fn end(_: WrapScope) void {
+        raw("ImGui_PopTextWrapPos")();
+    }
+};
+
 /// For unnamed ones use `@enumFromInt(c.ImGuiCol_Border)`.
 pub const Col = enum(c.ImGuiCol) {
     text = c.ImGuiCol_Text,
     text_disabled = c.ImGuiCol_TextDisabled,
     text_selected_bg = c.ImGuiCol_TextSelectedBg,
+    window_bg = c.ImGuiCol_WindowBg,
+    border = c.ImGuiCol_Border,
+    frame_bg = c.ImGuiCol_FrameBg,
+    menu_bar_bg = c.ImGuiCol_MenuBarBg,
+    button = c.ImGuiCol_Button,
+    button_hovered = c.ImGuiCol_ButtonHovered,
+    button_active = c.ImGuiCol_ButtonActive,
     header_hovered = c.ImGuiCol_HeaderHovered,
+    separator = c.ImGuiCol_Separator,
     frame_bg_active = c.ImGuiCol_FrameBgActive,
     plot_histogram = c.ImGuiCol_PlotHistogram,
     drag_drop_target = c.ImGuiCol_DragDropTarget,
@@ -1268,6 +1577,11 @@ pub const Col = enum(c.ImGuiCol) {
 /// With the style's alpha, packed for a `DrawList`.
 pub fn getColorU32(col: Col) u32 {
     return raw("ImGui_GetColorU32")(@backingInt(col));
+}
+
+/// `color` with the style's alpha, packed for a `DrawList`.
+pub fn colorU32(color: Color) u32 {
+    return raw("ImGui_GetColorU32ImVec4")(vec4(color));
 }
 
 /// ImGui's `IM_COL32`.
@@ -1285,6 +1599,10 @@ pub const DrawList = struct {
 
     pub fn addRectFilled(self: DrawList, min: Vec2, max: Vec2, colour: u32) void {
         raw("ImDrawList_AddRectFilled")(self.ptr, vec2(min), vec2(max), colour);
+    }
+
+    pub fn addRectFilledRounded(self: DrawList, min: Vec2, max: Vec2, colour: u32, rounding: f32) void {
+        raw("ImDrawList_AddRectFilledEx")(self.ptr, vec2(min), vec2(max), colour, rounding, 0);
     }
 
     pub fn addCircleFilled(self: DrawList, centre: Vec2, radius: f32, colour: u32) void {
@@ -1319,6 +1637,11 @@ pub fn getWindowDrawList() DrawList {
     return .{ .ptr = @ptrCast(raw("ImGui_GetWindowDrawList")()) };
 }
 
+/// Under every window in the main viewport.
+pub fn getBackgroundDrawList() DrawList {
+    return .{ .ptr = @ptrCast(raw("ImGui_GetBackgroundDrawListEx")(raw("ImGui_GetMainViewport")())) };
+}
+
 /// Fonts a host loaded. Each UI thread has its own ImGui, so its own fonts.
 pub const Fonts = struct {
     /// Fixed width, for hex and code.
@@ -1341,6 +1664,12 @@ pub fn monospace() FontScope {
 /// Until `end`, if there is one.
 pub fn bold() FontScope {
     return pushFont(fonts.bold);
+}
+
+/// The same font at `size` pixels. Until `end`.
+pub fn fontSized(size: f32) FontScope {
+    raw("ImGui_PushFontFloat")(null, size);
+    return .{ .pushed = true };
 }
 
 pub const FontScope = struct {
@@ -1479,6 +1808,8 @@ test pascalCase {
 }
 
 test {
+    _ = Reorder;
+    _ = Outline;
     _ = Toasts;
     _ = chord_input;
     _ = plot;

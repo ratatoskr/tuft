@@ -478,9 +478,8 @@ fn drawRow(self: *StructView, picking: anytype, i: usize, row: Row) void {
     if (row.depth > 0) ui.indent(indent);
     defer if (row.depth > 0) ui.unindent(indent);
     if (row.expandable) {
-        if (ui.smallButton(if (row.expanded) "-" else "+")) self.setOpen(row, !row.expanded);
-        ui.sameLine();
-    }
+        if (ui.Outline.arrow(row.expanded)) self.setOpen(row, !row.expanded);
+    } else ui.Outline.noArrow();
     if (editing == .name) {
         self.drawEdit(row, .name);
     } else switch (row.kind) {

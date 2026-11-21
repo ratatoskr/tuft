@@ -162,7 +162,7 @@ fn drawControls(self: *SearchView) void {
     {
         const disabled = ui.disabled(has_results);
         defer disabled.end();
-        const aligned_w = if (self.kind.isNumber()) checkboxWidth("Aligned") + ui.raw("ImGui_GetStyle")().*.ItemSpacing.x else 0;
+        const aligned_w = if (self.kind.isNumber()) checkboxWidth("Aligned") + ui.scaled(ui.getStyle().item_spacing[0]) else 0;
         ui.setNextItemWidthPixels(ui.getContentRegionAvailPixels()[0] - aligned_w);
         var scope: usize = @backingInt(self.scope);
         if (ui.combo("##scope", &scope, &scope_labels)) self.scope = @fromBackingInt(@intCast(scope));
@@ -200,7 +200,7 @@ fn halfWidth() f32 {
 }
 
 fn checkboxWidth(label: []const u8) f32 {
-    return ui.raw("ImGui_GetFrameHeight")() + ui.raw("ImGui_GetStyle")().*.ItemInnerSpacing.x + ui.calcTextSize(label)[0];
+    return ui.frameHeight() + ui.scaled(ui.getStyle().item_inner_spacing[0]) + ui.calcTextSize(label)[0];
 }
 
 fn drawHint(self: *const SearchView) void {
