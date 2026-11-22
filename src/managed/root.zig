@@ -279,6 +279,22 @@ pub const Runtime = union(Kind) {
         };
     }
 
+    /// Copies an instance field's value into `out`, which has to be big enough for its type. A
+    /// reference comes out as the object's pointer.
+    pub fn fieldValue(self: *const Runtime, o: *Object, f: *Field, out: *anyopaque) void {
+        switch (self.*) {
+            inline else => |*r| r.fieldValue(o, f, out),
+        }
+    }
+
+    /// Sets an instance field, through the runtime so the garbage collector hears about references.
+    /// `value` points at the value for value types, and is the object itself for references.
+    pub fn setFieldValue(self: *const Runtime, o: *Object, f: *Field, value: ?*anyopaque) void {
+        switch (self.*) {
+            inline else => |*r| r.setFieldValue(o, f, value),
+        }
+    }
+
     pub const StaticError = error{
         /// Or a `const`, which has no storage
         NotStatic,

@@ -1310,6 +1310,8 @@ pub const SliderOptions = struct {
     format: ?[:0]const u8 = null,
     /// Ctrl+click typing can't go past the ends either.
     clamp: bool = false,
+    /// As much room for 0.1 to 1 as for 1 to 10, like for a speed or a zoom.
+    logarithmic: bool = false,
 };
 
 /// For an `f32`, `f64`, `i32`, `u32`, `i64` or `u64`.
@@ -1318,7 +1320,9 @@ pub fn sliderWith(label: [:0]const u8, value: anytype, min: std.meta.Child(@Type
     const lo: T = min;
     const hi: T = max;
     const fmt: [*c]const u8 = if (options.format) |f| str(f) else null;
-    const f: c.ImGuiSliderFlags = if (options.clamp) c.ImGuiSliderFlags_AlwaysClamp else 0;
+    var f: c.ImGuiSliderFlags = 0;
+    if (options.clamp) f |= c.ImGuiSliderFlags_AlwaysClamp;
+    if (options.logarithmic) f |= c.ImGuiSliderFlags_Logarithmic;
     return raw("ImGui_SliderScalarEx")(str(label), dataType(T), @ptrCast(value), @ptrCast(&lo), @ptrCast(&hi), fmt, f);
 }
 

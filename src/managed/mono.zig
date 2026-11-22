@@ -56,6 +56,8 @@ pub const Api = struct {
     field_get_flags: *const fn (*Field) callconv(.c) u32,
     field_get_parent: *const fn (*Field) callconv(.c) ?*Class,
     field_static_get_value: *const fn (*VTable, *Field, *anyopaque) callconv(.c) void,
+    field_get_value: *const fn (*Object, *Field, *anyopaque) callconv(.c) void,
+    field_set_value: *const fn (*Object, *Field, ?*anyopaque) callconv(.c) void,
     type_get_name: *const fn (*Type) callconv(.c) ?[*:0]u8,
     type_get_type: *const fn (*Type) callconv(.c) c_int,
     free: *const fn (?*anyopaque) callconv(.c) void,
@@ -228,6 +230,14 @@ pub const Mono = struct {
         const vt = self.vtable(self.fieldClass(f) orelse return false) orelse return false;
         self.api.field_static_get_value(vt, f, out);
         return true;
+    }
+
+    pub fn fieldValue(self: *const Mono, o: *Object, f: *Field, out: *anyopaque) void {
+        self.api.field_get_value(o, f, out);
+    }
+
+    pub fn setFieldValue(self: *const Mono, o: *Object, f: *Field, value: ?*anyopaque) void {
+        self.api.field_set_value(o, f, value);
     }
 
     /// Add a static field's offset to get its address.

@@ -48,6 +48,8 @@ pub const Api = struct {
     field_get_flags: *const fn (*Field) callconv(.c) c_int,
     field_get_parent: *const fn (*Field) callconv(.c) ?*Class,
     field_static_get_value: *const fn (*Field, *anyopaque) callconv(.c) void,
+    field_get_value: *const fn (*Object, *Field, *anyopaque) callconv(.c) void,
+    field_set_value: *const fn (*Object, *Field, ?*anyopaque) callconv(.c) void,
     // Not in older Unity
     class_get_static_field_data: ?*const fn (*Class) callconv(.c) ?*anyopaque,
     runtime_class_init: ?*const fn (*Class) callconv(.c) void,
@@ -203,6 +205,14 @@ pub const Il2Cpp = struct {
     pub fn staticValue(self: *const Il2Cpp, f: *Field, out: *anyopaque) bool {
         self.api.field_static_get_value(f, out);
         return true;
+    }
+
+    pub fn fieldValue(self: *const Il2Cpp, o: *Object, f: *Field, out: *anyopaque) void {
+        self.api.field_get_value(o, f, out);
+    }
+
+    pub fn setFieldValue(self: *const Il2Cpp, o: *Object, f: *Field, value: ?*anyopaque) void {
+        self.api.field_set_value(o, f, value);
     }
 
     /// Runs the class's static constructor first if it hasn't, since its statics aren't there till
