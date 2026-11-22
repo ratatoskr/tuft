@@ -10,8 +10,19 @@ pub const Options = struct {
     priority: i32 = 0,
 };
 
-/// Inside a handler, list changes can't wait for dispatches since one is ours.
+/// Events this thread is dispatching, outermost first. Inside one, its list changes can't wait for
+/// dispatches since one is ours. Other events' still do, so cancelling a handler that's running on
+/// another thread waits for it.
+const max_nested = 16;
+threadlocal var dispatching: [max_nested]*const anyopaque = undefined;
 threadlocal var dispatch_depth: u32 = 0;
+
+/// Past `max_nested` it can't tell, so it's taken as inside, which never waits.
+fn dispatchingHere(event: *const anyopaque) bool {
+    if (dispatch_depth > max_nested) return true;
+    for (dispatching[0..dispatch_depth]) |e| if (e == event) return true;
+    return false;
+}
 
 pub fn Event(comptime Signature: type) type {
     const info = meta.fnInfo(Signature);
@@ -47,7 +58,8 @@ pub fn Event(comptime Signature: type) type {
             entries: []Entry,
         };
 
-        /// Unsubscribing waits for running dispatches, except from inside a handler. Twice is fine.
+        /// Unsubscribing waits for running dispatches, except from inside one of this event's
+        /// handlers. Twice is fine.
         pub const Subscription = struct {
             event: *Self,
             id: u64,
@@ -94,6 +106,7 @@ pub fn Event(comptime Signature: type) type {
 
             const snapshot = self.snapshot.load(.seq_cst) orelse return emptyResult();
 
+            if (dispatch_depth < max_nested) dispatching[dispatch_depth] = self;
             dispatch_depth += 1;
             defer dispatch_depth -= 1;
 
@@ -199,6 +212,11 @@ pub fn Event(comptime Signature: type) type {
             };
         }
 
+        /// Whether this thread's dispatching this event, so waiting for dispatches would wait on itself.
+        fn inside(self: *const Self) bool {
+            return dispatch_depth > 0 and dispatchingHere(self);
+        }
+
         fn enter(self: *Self) u1 {
             while (true) {
                 const epoch = self.epoch.load(.seq_cst);
@@ -235,7 +253,7 @@ pub fn Event(comptime Signature: type) type {
             const current = self.liveEntries();
             const new = try self.createSnapshot(current.live + 1);
             errdefer self.destroySnapshot(new);
-            if (dispatch_depth > 0) try self.retired.ensureUnusedCapacity(self.allocator, 1);
+            if (self.inside()) try self.retired.ensureUnusedCapacity(self.allocator, 1);
 
             var added = entry;
             added.id = self.next_id;
@@ -276,17 +294,17 @@ pub fn Event(comptime Signature: type) type {
 
             // Out of memory, so retire the entry in place and wait out dispatches
             target.alive.store(false, .release);
-            if (dispatch_depth == 0) self.synchronize();
+            if (!self.inside()) self.synchronize();
         }
 
         fn rebuildWithout(self: *Self, current: Live, id: u64) !?*Snapshot {
             if (current.live == 1) {
-                if (dispatch_depth > 0) try self.retired.ensureUnusedCapacity(self.allocator, 1);
+                if (self.inside()) try self.retired.ensureUnusedCapacity(self.allocator, 1);
                 return null;
             }
             const new = try self.createSnapshot(current.live - 1);
             errdefer self.destroySnapshot(new);
-            if (dispatch_depth > 0) try self.retired.ensureUnusedCapacity(self.allocator, 1);
+            if (self.inside()) try self.retired.ensureUnusedCapacity(self.allocator, 1);
 
             var out: usize = 0;
             for (current.entries) |*entry| {
@@ -300,7 +318,7 @@ pub fn Event(comptime Signature: type) type {
         /// Can't fail, the memory was reserved up front.
         fn publish(self: *Self, new: ?*Snapshot) void {
             const old = self.snapshot.swap(new, .seq_cst);
-            if (dispatch_depth > 0) {
+            if (self.inside()) {
                 // Our own dispatch might still be walking `old`
                 if (old) |s| self.retired.appendAssumeCapacity(s);
                 return;
@@ -529,6 +547,61 @@ const tests = struct {
         firer.join();
         try testing.expect(state.finished.load(.seq_cst));
         try testing.expect(unsubscribed.load(.seq_cst));
+    }
+
+    test "unsubscribe from inside another event's handler still waits" {
+        const Blocking = struct {
+            entered: std.atomic.Value(bool) = .init(false),
+            release: std.atomic.Value(bool) = .init(false),
+            finished: std.atomic.Value(bool) = .init(false),
+
+            fn handle(self: *@This()) void {
+                self.entered.store(true, .seq_cst);
+                while (!self.release.load(.seq_cst)) std.Thread.yield() catch {};
+                self.finished.store(true, .seq_cst);
+            }
+        };
+        const E = Event(fn () void);
+        const Canceller = struct {
+            sub: E.Subscription,
+            /// Whether the handler on the other thread was done by the time unsubscribe returned
+            saw_finished: bool = false,
+            state: *Blocking,
+
+            fn handle(self: *@This()) void {
+                self.sub.unsubscribe();
+                self.saw_finished = self.state.finished.load(.seq_cst);
+            }
+        };
+
+        var event: E = .init(testing.allocator);
+        defer event.deinit();
+        var other: E = .init(testing.allocator);
+        defer other.deinit();
+
+        var state: Blocking = .{};
+        var canceller: Canceller = .{ .sub = try event.subscribeUnscoped(&state, Blocking.handle), .state = &state };
+        const other_sub = try other.subscribeUnscoped(&canceller, Canceller.handle);
+        defer other_sub.unsubscribe();
+
+        const firer = try std.Thread.spawn(.{}, struct {
+            fn run(e: *E) void {
+                e.fire(.{});
+            }
+        }.run, .{&event});
+        while (!state.entered.load(.seq_cst)) std.Thread.yield() catch {};
+
+        const releaser = try std.Thread.spawn(.{}, struct {
+            fn run(s: *Blocking) void {
+                testing.io.sleep(.fromMilliseconds(20), .awake) catch {};
+                s.release.store(true, .seq_cst);
+            }
+        }.run, .{&state});
+        // Inside `other`'s handler, but `event`'s handler runs on another thread, so this waits
+        other.fire(.{});
+        releaser.join();
+        firer.join();
+        try testing.expect(canceller.saw_finished);
     }
 
     test "churn while firing" {
