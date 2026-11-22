@@ -269,59 +269,22 @@ comptime {
 const builtin = @import("builtin");
 pub const HWND = *anyopaque;
 
-pub const OPENFILENAMEW = extern struct {
-    lStructSize: DWORD = @sizeOf(OPENFILENAMEW),
-    hwndOwner: ?HWND = null,
-    hInstance: ?HINSTANCE = null,
-    lpstrFilter: ?[*:0]const u16 = null,
-    lpstrCustomFilter: ?[*]u16 = null,
-    nMaxCustFilter: DWORD = 0,
-    nFilterIndex: DWORD = 0,
-    lpstrFile: [*]u16,
-    nMaxFile: DWORD,
-    lpstrFileTitle: ?[*]u16 = null,
-    nMaxFileTitle: DWORD = 0,
-    lpstrInitialDir: ?[*:0]const u16 = null,
-    lpstrTitle: ?[*:0]const u16 = null,
-    Flags: DWORD = 0,
-    nFileOffset: u16 = 0,
-    nFileExtension: u16 = 0,
-    lpstrDefExt: ?[*:0]const u16 = null,
-    lCustData: isize = 0,
-    lpfnHook: ?*const anyopaque = null,
-    lpTemplateName: ?[*:0]const u16 = null,
-    pvReserved: ?*anyopaque = null,
-    dwReserved: DWORD = 0,
-    FlagsEx: DWORD = 0,
-
-    comptime {
-        std.debug.assert(@sizeOf(OPENFILENAMEW) == if (@sizeOf(usize) == 8) 152 else 88);
-    }
-};
-pub const OFN_OVERWRITEPROMPT: DWORD = 0x2;
-pub const OFN_HIDEREADONLY: DWORD = 0x4;
-pub const OFN_NOCHANGEDIR: DWORD = 0x8;
-pub const OFN_PATHMUSTEXIST: DWORD = 0x800;
-pub const OFN_FILEMUSTEXIST: DWORD = 0x1000;
-pub const OFN_EXPLORER: DWORD = 0x80000;
-pub extern "comdlg32" fn GetOpenFileNameW(ofn: *OPENFILENAMEW) callconv(.winapi) BOOL;
-pub extern "comdlg32" fn GetSaveFileNameW(ofn: *OPENFILENAMEW) callconv(.winapi) BOOL;
-/// 0 means the user cancelled.
-pub extern "comdlg32" fn CommDlgExtendedError() callconv(.winapi) DWORD;
-
-// COM, for the folder picker. Only the methods we call, in vtable order.
+// COM, for the file and folder pickers. Only the methods we call, in vtable order.
 pub const HRESULT = i32;
 pub const COINIT_APARTMENTTHREADED: DWORD = 0x2;
 pub const COINIT_DISABLE_OLE1DDE: DWORD = 0x4;
 pub const CLSCTX_INPROC_SERVER: DWORD = 0x1;
 /// What `Show` gives when the user cancels.
 pub const HRESULT_CANCELLED: HRESULT = @bitCast(@as(u32, 0x800704C7));
+pub const FOS_OVERWRITEPROMPT: DWORD = 0x2;
 pub const FOS_NOCHANGEDIR: DWORD = 0x8;
 pub const FOS_PICKFOLDERS: DWORD = 0x20;
 pub const FOS_FORCEFILESYSTEM: DWORD = 0x40;
 pub const FOS_PATHMUSTEXIST: DWORD = 0x800;
+pub const FOS_FILEMUSTEXIST: DWORD = 0x1000;
 pub const SIGDN_FILESYSPATH: u32 = 0x80058000;
 pub const CLSID_FileOpenDialog: zwin.GUID = .parse("{DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7}");
+pub const CLSID_FileSaveDialog: zwin.GUID = .parse("{C0B4E2F3-BA21-4773-8DBA-335EC946EB8B}");
 pub const IID_IFileDialog: zwin.GUID = .parse("{42f85136-db7e-439c-85f1-e4075d135fc8}");
 pub const IID_IShellItem: zwin.GUID = .parse("{43826d1e-e718-42ee-bc55-a1e261c37bfe}");
 pub extern "ole32" fn CoInitializeEx(reserved: ?*anyopaque, flags: DWORD) callconv(.winapi) HRESULT;
@@ -342,6 +305,12 @@ pub const IShellItem = extern struct {
     };
 };
 
+/// A file type in a dialog's list, like "Wraith project" and "*.rwp".
+pub const COMDLG_FILTERSPEC = extern struct {
+    name: [*:0]const u16,
+    spec: [*:0]const u16,
+};
+
 pub const IFileDialog = extern struct {
     vtable: *const VTable,
 
@@ -350,8 +319,9 @@ pub const IFileDialog = extern struct {
         AddRef: *const anyopaque,
         Release: *const fn (*IFileDialog) callconv(.winapi) u32,
         Show: *const fn (*IFileDialog, owner: ?HWND) callconv(.winapi) HRESULT,
-        SetFileTypes: *const anyopaque,
-        SetFileTypeIndex: *const anyopaque,
+        SetFileTypes: *const fn (*IFileDialog, count: u32, types: [*]const COMDLG_FILTERSPEC) callconv(.winapi) HRESULT,
+        /// From 1.
+        SetFileTypeIndex: *const fn (*IFileDialog, index: u32) callconv(.winapi) HRESULT,
         GetFileTypeIndex: *const anyopaque,
         Advise: *const anyopaque,
         Unadvise: *const anyopaque,
@@ -361,12 +331,15 @@ pub const IFileDialog = extern struct {
         SetFolder: *const fn (*IFileDialog, folder: *IShellItem) callconv(.winapi) HRESULT,
         GetFolder: *const anyopaque,
         GetCurrentSelection: *const anyopaque,
-        SetFileName: *const anyopaque,
+        SetFileName: *const fn (*IFileDialog, name: [*:0]const u16) callconv(.winapi) HRESULT,
         GetFileName: *const anyopaque,
         SetTitle: *const fn (*IFileDialog, title: [*:0]const u16) callconv(.winapi) HRESULT,
         SetOkButtonLabel: *const anyopaque,
         SetFileNameLabel: *const anyopaque,
         GetResult: *const fn (*IFileDialog, item: *?*IShellItem) callconv(.winapi) HRESULT,
+        AddPlace: *const anyopaque,
+        /// Without the dot.
+        SetDefaultExtension: *const fn (*IFileDialog, extension: [*:0]const u16) callconv(.winapi) HRESULT,
     };
 };
 pub extern "user32" fn CreateWindowExW(

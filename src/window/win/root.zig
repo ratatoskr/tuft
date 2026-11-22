@@ -19,97 +19,115 @@ pub fn pickFile(gpa: std.mem.Allocator, options: window.FileDialog) !?[]u8 {
     defer arena.deinit();
     const a = arena.allocator();
     const W = std.unicode.utf8ToUtf16LeAllocZ;
-    // "Kind (*.ext)\0*.ext\0All files\0*.*\0\0"
-    const filter_text = if (options.extension.len > 0)
-        try std.fmt.allocPrint(a, "{s} (*{s})\x00*{s}\x00All files\x00*.*\x00", .{ options.kind, options.extension, options.extension })
-    else
-        "All files\x00*.*\x00";
-    const filter = try std.unicode.utf8ToUtf16LeAllocZ(a, filter_text);
-    var file: [4096:0]u16 = @splat(0);
-    if (options.file_name.len > 0) {
-        const n = std.unicode.utf8ToUtf16Le(&file, options.file_name) catch return error.NameTooLong;
-        file[n] = 0;
+    const com = Com.init();
+    defer com.deinit();
+
+    const save = options.mode == .save;
+    const dialog = try Dialog.create(if (save) &win.CLSID_FileSaveDialog else &win.CLSID_FileOpenDialog);
+    defer dialog.release();
+    try dialog.setup(a, if (save) win.FOS_OVERWRITEPROMPT else win.FOS_FILEMUSTEXIST, options.title, options.folder);
+    const d = dialog.ptr;
+
+    // "Kind (*.ext)" then "All files"
+    var types: [2]win.COMDLG_FILTERSPEC = undefined;
+    var count: u32 = 0;
+    if (options.extension.len > 0) {
+        const spec = try std.fmt.allocPrint(a, "*{s}", .{options.extension});
+        const name = if (options.kind.len > 0) try std.fmt.allocPrint(a, "{s} ({s})", .{ options.kind, spec }) else spec;
+        types[count] = .{ .name = try W(a, name), .spec = try W(a, spec) };
+        count += 1;
     }
-    const def_ext: ?[*:0]const u16 = if (options.extension.len > 1) try W(a, options.extension[1..]) else null;
-    const stand_in = StandIn.over(options.over);
-    defer if (stand_in) |h| destroy(h);
-    const noted = DialogThreads.note();
-    defer DialogThreads.forget(noted);
-    var ofn: win.OPENFILENAMEW = .{
-        .hwndOwner = options.owner orelse stand_in,
-        .lpstrFilter = filter.ptr,
-        .nFilterIndex = 1,
-        .lpstrFile = &file,
-        .nMaxFile = file.len,
-        .lpstrInitialDir = if (options.folder.len > 0) try W(a, options.folder) else null,
-        .lpstrTitle = if (options.title.len > 0) try W(a, options.title) else null,
-        .lpstrDefExt = def_ext,
-        .Flags = win.OFN_EXPLORER | win.OFN_NOCHANGEDIR | win.OFN_HIDEREADONLY | win.OFN_PATHMUSTEXIST |
-            (if (options.mode == .save) win.OFN_OVERWRITEPROMPT else win.OFN_FILEMUSTEXIST),
-    };
-    var watching = Watch.start(options.owner, options.alive);
-    defer if (watching) |*w| w.stop();
-    const ok = switch (options.mode) {
-        .open => win.GetOpenFileNameW(&ofn),
-        .save => win.GetSaveFileNameW(&ofn),
-    };
-    if (!ok.toBool()) {
-        if (win.CommDlgExtendedError() == 0) return null;
-        return error.DialogFailed;
-    }
-    return try std.unicode.utf16LeToUtf8Alloc(gpa, std.mem.sliceTo(&file, 0));
+    types[count] = .{ .name = std.unicode.utf8ToUtf16LeStringLiteral("All files"), .spec = std.unicode.utf8ToUtf16LeStringLiteral("*.*") };
+    count += 1;
+    _ = d.vtable.SetFileTypes(d, count, &types);
+    _ = d.vtable.SetFileTypeIndex(d, 1);
+    if (options.extension.len > 1) _ = d.vtable.SetDefaultExtension(d, try W(a, options.extension[1..]));
+    if (options.file_name.len > 0) _ = d.vtable.SetFileName(d, try W(a, options.file_name));
+
+    return dialog.show(gpa, options.owner, options.over, options.alive);
 }
 
 pub fn pickFolder(gpa: std.mem.Allocator, options: window.FolderDialog) !?[]u8 {
-    const W = std.unicode.utf8ToUtf16LeAllocZ;
-    // Fine if it's already set up on this thread. A thread set up for free threading still works
-    const init = win.CoInitializeEx(null, win.COINIT_APARTMENTTHREADED | win.COINIT_DISABLE_OLE1DDE);
-    defer if (init >= 0) win.CoUninitialize();
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const com = Com.init();
+    defer com.deinit();
 
-    var raw: ?*anyopaque = null;
-    if (win.CoCreateInstance(&win.CLSID_FileOpenDialog, null, win.CLSCTX_INPROC_SERVER, &win.IID_IFileDialog, &raw) < 0) return error.DialogFailed;
-    const dialog: *win.IFileDialog = @ptrCast(@alignCast(raw orelse return error.DialogFailed));
-    defer _ = dialog.vtable.Release(dialog);
-
-    var flags: win.DWORD = 0;
-    _ = dialog.vtable.GetOptions(dialog, &flags);
-    _ = dialog.vtable.SetOptions(dialog, flags | win.FOS_PICKFOLDERS | win.FOS_FORCEFILESYSTEM | win.FOS_PATHMUSTEXIST | win.FOS_NOCHANGEDIR);
-    if (options.title.len > 0) {
-        const title = try W(gpa, options.title);
-        defer gpa.free(title);
-        _ = dialog.vtable.SetTitle(dialog, title);
-    }
-    // A folder that's gone just starts it somewhere else
-    if (options.folder.len > 0) start: {
-        const path = try W(gpa, options.folder);
-        defer gpa.free(path);
-        var item_raw: ?*anyopaque = null;
-        if (win.SHCreateItemFromParsingName(path, null, &win.IID_IShellItem, &item_raw) < 0) break :start;
-        const item: *win.IShellItem = @ptrCast(@alignCast(item_raw orelse break :start));
-        defer _ = item.vtable.Release(item);
-        _ = dialog.vtable.SetFolder(dialog, item);
-    }
-
-    const stand_in = StandIn.over(options.over);
-    defer if (stand_in) |h| destroy(h);
-    const noted = DialogThreads.note();
-    defer DialogThreads.forget(noted);
-    var watching = Watch.start(options.owner, options.alive);
-    defer if (watching) |*w| w.stop();
-    const shown = dialog.vtable.Show(dialog, options.owner orelse stand_in);
-    if (shown == win.HRESULT_CANCELLED) return null;
-    if (shown < 0) return error.DialogFailed;
-
-    var result: ?*win.IShellItem = null;
-    if (dialog.vtable.GetResult(dialog, &result) < 0) return error.DialogFailed;
-    const item = result orelse return error.DialogFailed;
-    defer _ = item.vtable.Release(item);
-    var name: ?[*:0]u16 = null;
-    if (item.vtable.GetDisplayName(item, win.SIGDN_FILESYSPATH, &name) < 0) return error.DialogFailed;
-    const wide = name orelse return error.DialogFailed;
-    defer win.CoTaskMemFree(wide);
-    return try std.unicode.utf16LeToUtf8Alloc(gpa, std.mem.span(wide));
+    const dialog = try Dialog.create(&win.CLSID_FileOpenDialog);
+    defer dialog.release();
+    try dialog.setup(arena.allocator(), win.FOS_PICKFOLDERS, options.title, options.folder);
+    return dialog.show(gpa, options.owner, options.over, options.alive);
 }
+
+/// COM on the dialog's thread, which the shell's dialogs need. Fine if it's already set up there,
+/// and a thread set up for free threading still works.
+const Com = struct {
+    ok: bool,
+
+    fn init() Com {
+        return .{ .ok = win.CoInitializeEx(null, win.COINIT_APARTMENTTHREADED | win.COINIT_DISABLE_OLE1DDE) >= 0 };
+    }
+
+    fn deinit(self: Com) void {
+        if (self.ok) win.CoUninitialize();
+    }
+};
+
+/// The shell's open, save or folder dialog.
+const Dialog = struct {
+    ptr: *win.IFileDialog,
+
+    fn create(clsid: *const @TypeOf(win.CLSID_FileOpenDialog)) !Dialog {
+        var raw: ?*anyopaque = null;
+        if (win.CoCreateInstance(clsid, null, win.CLSCTX_INPROC_SERVER, &win.IID_IFileDialog, &raw) < 0) return error.DialogFailed;
+        return .{ .ptr = @ptrCast(@alignCast(raw orelse return error.DialogFailed)) };
+    }
+
+    fn release(self: Dialog) void {
+        _ = self.ptr.vtable.Release(self.ptr);
+    }
+
+    fn setup(self: Dialog, a: std.mem.Allocator, extra: win.DWORD, title: []const u8, folder: []const u8) !void {
+        const d = self.ptr;
+        var flags: win.DWORD = 0;
+        _ = d.vtable.GetOptions(d, &flags);
+        _ = d.vtable.SetOptions(d, flags | extra | win.FOS_FORCEFILESYSTEM | win.FOS_PATHMUSTEXIST | win.FOS_NOCHANGEDIR);
+        if (title.len > 0) _ = d.vtable.SetTitle(d, try std.unicode.utf8ToUtf16LeAllocZ(a, title));
+        // A folder that's gone just starts it somewhere else
+        if (folder.len > 0) start: {
+            const path = try std.unicode.utf8ToUtf16LeAllocZ(a, folder);
+            var item_raw: ?*anyopaque = null;
+            if (win.SHCreateItemFromParsingName(path, null, &win.IID_IShellItem, &item_raw) < 0) break :start;
+            const item: *win.IShellItem = @ptrCast(@alignCast(item_raw orelse break :start));
+            defer _ = item.vtable.Release(item);
+            _ = d.vtable.SetFolder(d, item);
+        }
+    }
+
+    /// Blocks till it's closed. The picked path, or null if it was cancelled.
+    fn show(self: Dialog, gpa: std.mem.Allocator, owner: ?Handle, over: ?Handle, alive: ?window.FileDialog.Alive) !?[]u8 {
+        const d = self.ptr;
+        const stand_in = StandIn.over(over);
+        defer if (stand_in) |h| destroy(h);
+        const noted = DialogThreads.note();
+        defer DialogThreads.forget(noted);
+        var watching = Watch.start(owner, alive);
+        defer if (watching) |*w| w.stop();
+        const shown = d.vtable.Show(d, owner orelse stand_in);
+        if (shown == win.HRESULT_CANCELLED) return null;
+        if (shown < 0) return error.DialogFailed;
+
+        var result: ?*win.IShellItem = null;
+        if (d.vtable.GetResult(d, &result) < 0) return error.DialogFailed;
+        const item = result orelse return error.DialogFailed;
+        defer _ = item.vtable.Release(item);
+        var name: ?[*:0]u16 = null;
+        if (item.vtable.GetDisplayName(item, win.SIGDN_FILESYSPATH, &name) < 0) return error.DialogFailed;
+        const wide = name orelse return error.DialogFailed;
+        defer win.CoTaskMemFree(wide);
+        return try std.unicode.utf16LeToUtf8Alloc(gpa, std.mem.span(wide));
+    }
+};
 
 pub fn ownsDialog(hwnd: Handle) bool {
     const id = threadOf(hwnd);
