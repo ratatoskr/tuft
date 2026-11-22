@@ -352,6 +352,114 @@ pub const Chord = struct {
     }
 };
 
+/// Up to `max` chords that all do the same, like a key and a controller button. The first is
+/// `key` and `mods`, so one chord written down, like `.{ .key = .f8 }` or a saved one, is a `Keys`
+/// with just it.
+pub const Keys = struct {
+    key: Key,
+    mods: Mods = .{},
+    /// After the first, with no gaps.
+    more: [max - 1]?Chord = @splat(null),
+
+    pub const max = 4;
+
+    pub fn one(chord: Chord) Keys {
+        return .{ .key = chord.key, .mods = chord.mods };
+    }
+
+    /// Null for none. Repeats are dropped, and past `max` too.
+    pub fn of(chords: []const Chord) ?Keys {
+        if (chords.len == 0) return null;
+        var out: Keys = .one(chords[0]);
+        for (chords[1..]) |c| out = out.with(c);
+        return out;
+    }
+
+    pub fn first(self: Keys) Chord {
+        return .{ .key = self.key, .mods = self.mods };
+    }
+
+    pub fn count(self: Keys) usize {
+        var n: usize = 1;
+        for (self.more) |m| {
+            if (m == null) break;
+            n += 1;
+        }
+        return n;
+    }
+
+    pub fn get(self: Keys, i: usize) ?Chord {
+        if (i == 0) return self.first();
+        if (i > self.more.len) return null;
+        return self.more[i - 1];
+    }
+
+    /// Into `buf`, in order.
+    pub fn slice(self: Keys, buf: *[max]Chord) []Chord {
+        const n = self.count();
+        for (0..n) |i| buf[i] = self.get(i).?;
+        return buf[0..n];
+    }
+
+    pub fn contains(self: Keys, chord: Chord) bool {
+        for (0..self.count()) |i| if (self.get(i).?.eql(chord)) return true;
+        return false;
+    }
+
+    /// With `chord` added at the end, unless it's there already or there's no room.
+    pub fn with(self: Keys, chord: Chord) Keys {
+        if (self.contains(chord)) return self;
+        var out = self;
+        for (&out.more) |*m| if (m.* == null) {
+            m.* = chord;
+            return out;
+        };
+        return out;
+    }
+
+    /// The one at `i` swapped for `chord`, or dropped if `chord` is there already.
+    pub fn replaced(self: Keys, i: usize, chord: Chord) Keys {
+        var buf: [max]Chord = undefined;
+        const all = self.slice(&buf);
+        if (i >= all.len) return self.with(chord);
+        if (self.contains(chord)) return self.without(i) orelse self;
+        all[i] = chord;
+        return of(all).?;
+    }
+
+    /// Without the one at `i`. Null once there's none left.
+    pub fn without(self: Keys, i: usize) ?Keys {
+        var buf: [max]Chord = undefined;
+        const all = self.slice(&buf);
+        if (i >= all.len) return self;
+        std.mem.copyForwards(Chord, all[i .. all.len - 1], all[i + 1 ..]);
+        return of(all[0 .. all.len - 1]);
+    }
+
+    pub fn eql(a: Keys, b: Keys) bool {
+        if (a.count() != b.count()) return false;
+        for (0..a.count()) |i| if (!a.get(i).?.eql(b.get(i).?)) return false;
+        return true;
+    }
+
+    /// Whether `key` with `mods` held is one of them. Held ones go by the key alone.
+    pub fn matches(self: Keys, key: Key, mods: Mods, held: bool) bool {
+        for (0..self.count()) |i| {
+            const c = self.get(i).?;
+            if (if (held) c.key == key else c.matches(key, mods)) return true;
+        }
+        return false;
+    }
+
+    pub fn isValid(self: Keys, held: bool) bool {
+        for (0..self.count()) |i| {
+            const c = self.get(i).?;
+            if (!(if (held) c.isValidHeld() else c.isValid())) return false;
+        }
+        return true;
+    }
+};
+
 test "chord match" {
     const chord: Chord = .{ .key = .f8, .mods = .{ .ctrl = true } };
     try std.testing.expect(chord.matches(.f8, .{ .ctrl = true }));
@@ -370,6 +478,34 @@ test "controller chords" {
     try std.testing.expect((Chord{ .key = .f8, .mods = .{ .alt = true } }).isValid());
     try std.testing.expect((Chord{ .key = .left_shift }).isValidHeld());
     try std.testing.expect(!(Chord{ .key = .w, .mods = .{ .shift = true } }).isValidHeld());
+}
+
+test "a list of keys" {
+    const shift: Chord = .{ .key = .left_shift };
+    const rb: Chord = .{ .key = .gamepad_right_shoulder };
+    var keys: Keys = .one(shift);
+    keys = keys.with(rb).with(rb);
+    try std.testing.expectEqual(2, keys.count());
+    try std.testing.expect(keys.matches(.gamepad_right_shoulder, .{}, true));
+    try std.testing.expect(keys.matches(.left_shift, .{ .shift = true }, true));
+    try std.testing.expect(!keys.matches(.left_shift, .{ .shift = true }, false));
+    try std.testing.expect(keys.isValid(true) and !keys.isValid(false));
+
+    // Taking the first moves the rest up
+    const left = keys.without(0).?;
+    try std.testing.expect(left.first().eql(rb) and left.count() == 1);
+    try std.testing.expectEqual(null, left.without(0));
+    try std.testing.expect(keys.replaced(1, .{ .key = .f8 }).get(1).?.eql(.{ .key = .f8 }));
+    // A repeat is dropped rather than kept twice
+    try std.testing.expectEqual(1, keys.replaced(1, shift).count());
+    try std.testing.expect(Keys.of(&.{ shift, rb }).?.eql(keys));
+
+    // One chord saved before reads as a list of one
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var diagnostics: std.zon.parse.Diagnostics = undefined;
+    const saved = try std.zon.parse.fromSlice(Keys, .{ .gpa = std.testing.allocator, .arena = arena.allocator(), .source = ".{ .key = .f8, .mods = .{ .ctrl = true } }", .diagnostics = &diagnostics });
+    try std.testing.expect(saved.eql(.one(.{ .key = .f8, .mods = .{ .ctrl = true } })));
 }
 
 test "pad buttons" {

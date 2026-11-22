@@ -15,6 +15,7 @@ const Gamepads = @import("Gamepads.zig");
 const log = std.log.scoped(.tuft_input);
 
 pub const Chord = @import("root.zig").Chord;
+pub const Keys = @import("root.zig").Keys;
 pub const Phase = enum { pressed, released };
 
 pub const Trigger = struct { serial: u64, phase: Phase };
@@ -24,13 +25,14 @@ pub const Action = struct {
     /// Unique, like `"wraith.toggle_overlay"`. Plugins use `"<plugin>.<name>"`.
     id: []const u8,
     name: []const u8,
-    chord: Chord,
+    /// Any of them does it, like a key and a controller button.
+    keys: Keys,
     /// Hide the key's messages and polling from the game. Raw input still sees it.
     consume: bool = true,
     /// Also matches while ImGui takes text input.
     while_typing: bool = false,
     /// A key that's held, like one to move with: it fires whatever modifiers are down too, and its
-    /// key can be a modifier itself, like Shift. Its chord has no modifiers.
+    /// key can be a modifier itself, like Shift. Its keys have no modifiers.
     held: bool = false,
 };
 
@@ -92,25 +94,34 @@ pub const Binding = struct {
     serial: u64,
     id: []u8,
     name: []u8,
-    chord: Chord,
+    keys: Keys,
     consume: bool,
     while_typing: bool,
     held: bool,
     ctx: ?*anyopaque,
     call: *const fn (ctx: ?*anyopaque, phase: Phase) void,
     subscription: TriggerEvent.Subscription = undefined,
+    /// Its keys that are down, so two held at once press it once and release it once. Render thread.
+    downs: u8 = 0,
 
     fn onTrigger(self: *Binding, trigger: Trigger) void {
-        if (trigger.serial == self.serial) self.call(self.ctx, trigger.phase);
+        if (trigger.serial != self.serial) return;
+        switch (trigger.phase) {
+            .pressed => {
+                self.downs +|= 1;
+                if (self.downs == 1) self.call(self.ctx, .pressed);
+            },
+            .released => {
+                if (self.downs == 0) return;
+                self.downs -= 1;
+                if (self.downs == 0) self.call(self.ctx, .released);
+            },
+        }
     }
 
     /// Whether `key` with `mods` held sets it off.
     fn matches(self: *const Binding, key: @import("root.zig").Key, mods: @import("root.zig").Mods) bool {
-        return if (self.held) self.chord.key == key else self.chord.matches(key, mods);
-    }
-
-    fn valid(self: *const Binding, chord: Chord) bool {
-        return if (self.held) chord.isValidHeld() else chord.isValid();
+        return self.keys.matches(key, mods, self.held);
     }
 
     /// Waits for its handler if it's running on another thread.
@@ -124,15 +135,19 @@ pub const Binding = struct {
     }
 
     /// Counts from the next press. Any thread.
-    pub fn rebind(self: *Binding, chord: Chord) error{InvalidChord}!void {
-        if (!self.valid(chord)) return error.InvalidChord;
+    pub fn rebind(self: *Binding, keys: Keys) error{InvalidChord}!void {
+        if (!keys.isValid(self.held)) return error.InvalidChord;
         const k = self.keybinds;
         k.lock.lock();
         defer k.lock.unlock();
         for (k.bindings.items) |other| {
-            if (other != self and other.chord.eql(chord)) log.warn("{s} and {s} are both bound to {f}", .{ other.id, self.id, chord });
+            if (other == self) continue;
+            for (0..keys.count()) |i| {
+                const chord = keys.get(i).?;
+                if (other.keys.contains(chord)) log.warn("{s} and {s} are both bound to {f}", .{ other.id, self.id, chord });
+            }
         }
-        self.chord = chord;
+        self.keys = keys;
         _ = k.changes.fetchAdd(1, .release);
     }
 };
@@ -211,7 +226,7 @@ pub fn bindUnscoped(self: *Keybinds, action: Action, ctx: anytype, comptime func
 }
 
 fn bindRaw(self: *Keybinds, action: Action, ctx: ?*anyopaque, call: *const fn (?*anyopaque, Phase) void) Error!*Binding {
-    if (!(if (action.held) action.chord.isValidHeld() else action.chord.isValid())) return error.InvalidChord;
+    if (!action.keys.isValid(action.held)) return error.InvalidChord;
 
     const binding = try self.allocator.create(Binding);
     errdefer self.allocator.destroy(binding);
@@ -224,7 +239,7 @@ fn bindRaw(self: *Keybinds, action: Action, ctx: ?*anyopaque, call: *const fn (?
         .serial = self.next_serial.fetchAdd(1, .monotonic),
         .id = id,
         .name = name,
-        .chord = action.chord,
+        .keys = action.keys,
         .consume = action.consume,
         .while_typing = action.while_typing,
         .held = action.held,
@@ -238,7 +253,10 @@ fn bindRaw(self: *Keybinds, action: Action, ctx: ?*anyopaque, call: *const fn (?
     defer self.lock.unlock();
     for (self.bindings.items) |other| {
         if (std.mem.eql(u8, other.id, id)) return error.AlreadyBound;
-        if (other.chord.eql(action.chord)) log.warn("{s} and {s} are both bound to {f}", .{ other.id, id, action.chord });
+        for (0..action.keys.count()) |i| {
+            const chord = action.keys.get(i).?;
+            if (other.keys.contains(chord)) log.warn("{s} and {s} are both bound to {f}", .{ other.id, id, chord });
+        }
     }
     try self.bindings.append(self.allocator, binding);
     _ = self.changes.fetchAdd(1, .release);
@@ -260,19 +278,22 @@ pub fn clashesAlloc(self: *Keybinds, allocator: std.mem.Allocator) ![]Clash {
     self.lock.lockShared();
     defer self.lock.unlockShared();
     const all = self.bindings.items;
-    for (all, 0..) |b, i| {
+    var seen: std.ArrayList(Chord) = .empty;
+    defer seen.deinit(allocator);
+    for (all) |b| for (0..b.keys.count()) |k| {
+        const chord = b.keys.get(k).?;
         // Each key once, at its first binding
-        const seen = for (all[0..i]) |earlier| {
-            if (earlier.chord.eql(b.chord)) break true;
-        } else false;
-        if (seen) continue;
+        if (for (seen.items) |s| {
+            if (s.eql(chord)) break true;
+        } else false) continue;
+        try seen.append(allocator, chord);
         var ids: std.ArrayList([]const u8) = .empty;
         errdefer {
             for (ids.items) |id| allocator.free(id);
             ids.deinit(allocator);
         }
-        for (all[i..]) |other| {
-            if (other.chord.eql(b.chord)) try ids.append(allocator, try allocator.dupe(u8, other.id));
+        for (all) |other| {
+            if (other.keys.contains(chord)) try ids.append(allocator, try allocator.dupe(u8, other.id));
         }
         if (ids.items.len < 2) {
             for (ids.items) |id| allocator.free(id);
@@ -280,12 +301,12 @@ pub fn clashesAlloc(self: *Keybinds, allocator: std.mem.Allocator) ![]Clash {
             continue;
         }
         const owned = try ids.toOwnedSlice(allocator);
-        out.append(allocator, .{ .chord = b.chord, .ids = owned }) catch |err| {
+        out.append(allocator, .{ .chord = chord, .ids = owned }) catch |err| {
             for (owned) |id| allocator.free(id);
             allocator.free(owned);
             return err;
         };
-    }
+    };
     return out.toOwnedSlice(allocator);
 }
 
@@ -529,7 +550,7 @@ const tests = struct {
         rig.present(); // attaches
 
         var rec: Recorder = .{};
-        try rig.keybinds.bind(&rig.scope, .{ .id = "test.f8", .name = "F8", .chord = .{ .key = .f8 } }, &rec, Recorder.onPhase);
+        try rig.keybinds.bind(&rig.scope, .{ .id = "test.f8", .name = "F8", .keys = .{ .key = .f8 } }, &rec, Recorder.onPhase);
 
         try testing.expectEqual(0, rig.send(api.WM_KEYDOWN, VK_F8, 1));
         try testing.expectEqual(0, rec.presses); // delivered with the next frame
@@ -565,8 +586,8 @@ const tests = struct {
 
         var shared: Recorder = .{};
         var typed: Recorder = .{};
-        try rig.keybinds.bind(&rig.scope, .{ .id = "test.f8", .name = "F8", .chord = .{ .key = .f8 }, .consume = false }, &shared, Recorder.onPress);
-        try rig.keybinds.bind(&rig.scope, .{ .id = "test.f9", .name = "F9", .chord = .{ .key = .f9 }, .while_typing = true }, &typed, Recorder.onPress);
+        try rig.keybinds.bind(&rig.scope, .{ .id = "test.f8", .name = "F8", .keys = .{ .key = .f8 }, .consume = false }, &shared, Recorder.onPress);
+        try rig.keybinds.bind(&rig.scope, .{ .id = "test.f9", .name = "F9", .keys = .{ .key = .f9 }, .while_typing = true }, &typed, Recorder.onPress);
 
         _ = rig.send(api.WM_KEYDOWN, VK_F8, 1);
         try testing.expectEqual(1, Rig.game.count(api.WM_KEYDOWN));
@@ -592,9 +613,9 @@ const tests = struct {
 
         var fast: Recorder = .{};
         var ahead: Recorder = .{};
-        try rig.keybinds.bind(&rig.scope, .{ .id = "test.fast", .name = "Fast", .chord = .{ .key = .left_shift }, .held = true, .consume = false }, &fast, Recorder.onPhase);
-        try rig.keybinds.bind(&rig.scope, .{ .id = "test.ahead", .name = "Ahead", .chord = .{ .key = .w }, .held = true, .consume = false }, &ahead, Recorder.onPhase);
-        try testing.expectError(error.InvalidChord, rig.keybinds.bind(&rig.scope, .{ .id = "test.shift_w", .name = "Shift W", .chord = .{ .key = .w, .mods = .{ .shift = true } }, .held = true }, &ahead, Recorder.onPhase));
+        try rig.keybinds.bind(&rig.scope, .{ .id = "test.fast", .name = "Fast", .keys = .{ .key = .left_shift }, .held = true, .consume = false }, &fast, Recorder.onPhase);
+        try rig.keybinds.bind(&rig.scope, .{ .id = "test.ahead", .name = "Ahead", .keys = .{ .key = .w }, .held = true, .consume = false }, &ahead, Recorder.onPhase);
+        try testing.expectError(error.InvalidChord, rig.keybinds.bind(&rig.scope, .{ .id = "test.shift_w", .name = "Shift W", .keys = .{ .key = .w, .mods = .{ .shift = true } }, .held = true }, &ahead, Recorder.onPhase));
 
         // Shift, then W while it's down
         _ = rig.send(api.WM_KEYDOWN, 0x10, 1 | (0x2A << 16));
@@ -608,6 +629,27 @@ const tests = struct {
         try testing.expectEqual(1, ahead.releases);
     }
 
+    test "two keys on one binding press it once, till both let go" {
+        var rig: Rig = undefined;
+        try rig.init();
+        defer rig.deinit();
+        rig.present();
+
+        var ahead: Recorder = .{};
+        const keys = Keys.one(.{ .key = .w }).with(.{ .key = .up });
+        try rig.keybinds.bind(&rig.scope, .{ .id = "test.ahead", .name = "Ahead", .keys = keys, .held = true, .consume = false }, &ahead, Recorder.onPhase);
+
+        _ = rig.send(api.WM_KEYDOWN, 'W', 1);
+        _ = rig.send(api.WM_KEYDOWN, 0x26, 1);
+        _ = rig.send(api.WM_KEYUP, 'W', key_up_flags);
+        rig.present();
+        try testing.expectEqual(1, ahead.presses);
+        try testing.expectEqual(0, ahead.releases);
+        _ = rig.send(api.WM_KEYUP, 0x26, key_up_flags);
+        rig.present();
+        try testing.expectEqual(1, ahead.releases);
+    }
+
     test "bind errors and unbind" {
         if (!@import("build_options").real_input) return error.SkipZigTest; // reads the real keyboard state
         var rig: Rig = undefined;
@@ -616,9 +658,9 @@ const tests = struct {
         rig.present();
 
         var rec: Recorder = .{};
-        const binding = try rig.keybinds.bindUnscoped(.{ .id = "test.f8", .name = "F8", .chord = .{ .key = .f8 } }, &rec, Recorder.onPress);
-        try testing.expectError(error.AlreadyBound, rig.keybinds.bindUnscoped(.{ .id = "test.f8", .name = "again", .chord = .{ .key = .f9 } }, &rec, Recorder.onPress));
-        try testing.expectError(error.InvalidChord, rig.keybinds.bindUnscoped(.{ .id = "test.shift", .name = "Shift", .chord = .{ .key = .left_shift } }, &rec, Recorder.onPress));
+        const binding = try rig.keybinds.bindUnscoped(.{ .id = "test.f8", .name = "F8", .keys = .{ .key = .f8 } }, &rec, Recorder.onPress);
+        try testing.expectError(error.AlreadyBound, rig.keybinds.bindUnscoped(.{ .id = "test.f8", .name = "again", .keys = .{ .key = .f9 } }, &rec, Recorder.onPress));
+        try testing.expectError(error.InvalidChord, rig.keybinds.bindUnscoped(.{ .id = "test.shift", .name = "Shift", .keys = .{ .key = .left_shift } }, &rec, Recorder.onPress));
 
         _ = rig.send(api.WM_KEYDOWN, VK_F8, 1);
         binding.unbind(); // before its press is delivered
@@ -651,8 +693,8 @@ const tests = struct {
         try rig.keybinds.attachGamepads(pads);
 
         var rec: Recorder = .{};
-        try rig.keybinds.bind(&rig.scope, .{ .id = "test.back", .name = "Back", .chord = .{ .key = .gamepad_back } }, &rec, Recorder.onPhase);
-        try testing.expectError(error.InvalidChord, rig.keybinds.bind(&rig.scope, .{ .id = "test.ctrl_a", .name = "Ctrl+A", .chord = .{ .key = .gamepad_a, .mods = .{ .ctrl = true } } }, &rec, Recorder.onPhase));
+        try rig.keybinds.bind(&rig.scope, .{ .id = "test.back", .name = "Back", .keys = .{ .key = .gamepad_back } }, &rec, Recorder.onPhase);
+        try testing.expectError(error.InvalidChord, rig.keybinds.bind(&rig.scope, .{ .id = "test.ctrl_a", .name = "Ctrl+A", .keys = .{ .key = .gamepad_a, .mods = .{ .ctrl = true } } }, &rec, Recorder.onPhase));
 
         fake.state = .{ .buttons = .{ .back = true, .a = true } };
         pads.pollNow();
@@ -680,11 +722,11 @@ const tests = struct {
         defer rig.deinit();
         var rec: Recorder = .{};
         const before = rig.keybinds.changes.load(.acquire);
-        try rig.keybinds.bind(&rig.scope, .{ .id = "a.f8", .name = "A", .chord = .{ .key = .f8 } }, &rec, Recorder.onPress);
-        try rig.keybinds.bind(&rig.scope, .{ .id = "b.f9", .name = "B", .chord = .{ .key = .f9 } }, &rec, Recorder.onPress);
-        const c = try rig.keybinds.bindUnscoped(.{ .id = "c.f8", .name = "C", .chord = .{ .key = .f8 } }, &rec, Recorder.onPress);
+        try rig.keybinds.bind(&rig.scope, .{ .id = "a.f8", .name = "A", .keys = .{ .key = .f8 } }, &rec, Recorder.onPress);
+        try rig.keybinds.bind(&rig.scope, .{ .id = "b.f9", .name = "B", .keys = .{ .key = .f9 } }, &rec, Recorder.onPress);
+        const c = try rig.keybinds.bindUnscoped(.{ .id = "c.f8", .name = "C", .keys = .{ .key = .f8 } }, &rec, Recorder.onPress);
         // Ctrl+F8 is a different key
-        try rig.keybinds.bind(&rig.scope, .{ .id = "d.ctrl_f8", .name = "D", .chord = .{ .key = .f8, .mods = .{ .ctrl = true } } }, &rec, Recorder.onPress);
+        try rig.keybinds.bind(&rig.scope, .{ .id = "d.ctrl_f8", .name = "D", .keys = .{ .key = .f8, .mods = .{ .ctrl = true } } }, &rec, Recorder.onPress);
         try testing.expect(rig.keybinds.changes.load(.acquire) > before);
 
         const clashes = try rig.keybinds.clashesAlloc(testing.allocator);
@@ -710,7 +752,7 @@ const tests = struct {
         rig.present();
 
         var rec: Recorder = .{};
-        try rig.keybinds.bind(&rig.scope, .{ .id = "test.f8", .name = "F8", .chord = .{ .key = .f8 } }, &rec, Recorder.onPhase);
+        try rig.keybinds.bind(&rig.scope, .{ .id = "test.f8", .name = "F8", .keys = .{ .key = .f8 } }, &rec, Recorder.onPhase);
         _ = rig.send(api.WM_KEYDOWN, VK_F8, 1);
         _ = rig.send(api.WM_KILLFOCUS, 0, 0);
         rig.present();
