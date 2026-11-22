@@ -383,34 +383,27 @@ pub const Devices = std.EnumSet(Device);
 /// Lets us hide part of a device, like clicks but not the cursor.
 pub const Channel = enum {
     keyboard,
-    /// Clicks, the wheel and button state.
     mouse_buttons,
     mouse_motion,
-    /// Controllers, buttons and sticks alike.
     gamepad,
 };
 pub const Channels = std.EnumSet(Channel);
 
 pub const Event = union(enum) {
-    /// Controller buttons come through here too, without mods or repeats.
     key: struct {
         key: Key,
         down: bool,
         repeat: bool = false,
         mods: Mods = .{},
     },
-    /// After keyboard layout and dead keys.
     text: u21,
-    /// Client coords.
     mouse_move: Point,
     mouse_button: struct { button: MouseButton, down: bool },
     /// In notches. `y > 0` scrolls up, `x > 0` scrolls right.
     wheel: struct { x: f32 = 0, y: f32 = 0 },
     mouse_leave,
     focus: bool,
-    /// Consume this if you set a cursor, or the window sets its own.
     cursor,
-    /// Sticks and triggers changed, or a controller came or went.
     gamepad_axes: PadAxes,
 
     pub fn device(self: Event) ?Device {
@@ -424,25 +417,20 @@ pub const Event = union(enum) {
     }
 };
 
-/// Keeps state across messages, so use one per window on its thread.
 pub const Translator = native.Translator;
 
-/// Channel of a message, even ones `Translator` doesn't turn into events.
 pub const channelOf = native.channelOf;
-/// IME messages are in the keyboard channel, but hidden they still need the default handling.
 pub const isImeMessage = native.isIme;
 
 pub const handledResult = native.handledResult;
 
-/// Hardware state, not the message stream.
 pub const isKeyDown = native.isKeyDown;
-/// Hardware state, not the message stream.
 pub const isButtonDown = native.isButtonDown;
 pub const cursorPosition = native.cursorPosition;
 pub const screenCursorPosition = native.screenCursorPosition;
-/// Until something sets it again.
+pub const moveCursor = native.moveCursor;
+pub const clientCenter = native.clientCenter;
 pub const hideCursor = native.hideCursor;
-/// Whether the app hasn't hidden the system cursor.
 pub const cursorVisible = native.cursorVisible;
 
 test {

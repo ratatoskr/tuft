@@ -191,6 +191,18 @@ pub fn screenCursorPosition() ?input.Point {
     return .{ .x = p.x, .y = p.y };
 }
 
+pub fn moveCursor(to: input.Point) void {
+    _ = win.SetCursorPos(to.x, to.y);
+}
+
+pub fn clientCenter(window: win.HWND) ?input.Point {
+    var r: win.RECT = .{};
+    if (!win.GetClientRect(window, &r).toBool()) return null;
+    var p: win.POINT = .{ .x = @divTrunc(r.left + r.right, 2), .y = @divTrunc(r.top + r.bottom, 2) };
+    if (!win.ClientToScreen(window, &p).toBool()) return null;
+    return .{ .x = p.x, .y = p.y };
+}
+
 pub fn hideCursor() void {
     _ = win.SetCursor(null);
 }
