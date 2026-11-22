@@ -548,6 +548,11 @@ pub fn tooltip(comptime fmt: []const u8, args: anytype) void {
     raw("ImGui_SetItemTooltipUnformatted")(str(format(fmt, args)));
 }
 
+/// Tooltip at the mouse this frame, for things that aren't widgets, like points drawn in the world.
+pub fn mouseTooltip(comptime fmt: []const u8, args: anytype) void {
+    raw("ImGui_SetTooltipUnformatted")(str(format(fmt, args)));
+}
+
 // The bool widgets return true if changed or clicked this frame.
 
 pub fn button(label: [:0]const u8) bool {
