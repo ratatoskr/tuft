@@ -29,6 +29,8 @@ pub fn build(b: *std.Build) void {
         .{ .name = "salamander_dyn", .module = salamander.module("salamander_dyn") },
     });
     const text = ctx.addModule("text", &.{});
+    // Plain maths, with nothing under it, so anything can share its types
+    const math = ctx.addModule("math", &.{});
     const sys = ctx.addModule("sys", &.{
         .{ .name = "tuft_arch", .module = arch },
     });
@@ -199,6 +201,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "tuft_ui", .module = ui_mod },
             .{ .name = "tuft_devtools", .module = devtools },
             .{ .name = "tuft_text", .module = text },
+            .{ .name = "tuft_math", .module = math },
         },
     });
 
@@ -413,5 +416,5 @@ const module_names = [_][]const u8{
     "tuft",         "tuft_arch",  "tuft_sys",    "tuft_mem",      "tuft_hook",   "tuft_event",
     "tuft_window",  "tuft_input", "tuft_inject", "tuft_proxy",    "tuft_gfx",    "tuft_imgui",
     "tuft_imgui_c", "tuft_asm",   "tuft_ui",     "tuft_devtools", "tuft_schema", "tuft_text",
-    "tuft_image",   "tuft_vfs",
+    "tuft_image",   "tuft_vfs",   "tuft_math",
 };

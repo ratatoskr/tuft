@@ -13,6 +13,8 @@ pub const Options = struct {
     listen: bool = false,
     /// Shown while it has no key.
     none: [:0]const u8 = "None",
+    /// For a held key: it takes a modifier on its own, like Shift, and keys without modifiers.
+    held: bool = false,
 };
 
 // Each ImGui context has its own thread, but tests make new ones
@@ -45,13 +47,13 @@ pub fn chordInput(label: [:0]const u8, chord: *?input.Chord, options: Options) b
         last_frame = frame;
         root.captureKeyboard();
         if (root.rawOptional(fn () callconv(.c) void, "tuft_imgui_listen_keys")) |listen| listen();
-        if (pressedKey()) |key| {
+        if (pressedKey(options.held)) |key| {
             listening_id = 0;
             took = true;
             if (key != .escape) {
                 const m = root.mods();
-                // Controller buttons take no modifiers
-                const picked: input.Chord = if (input.isPad(key)) .{ .key = key } else .{ .key = key, .mods = .{ .ctrl = m.ctrl, .shift = m.shift, .alt = m.alt, .super = m.super } };
+                // Controller buttons and held keys take no modifiers
+                const picked: input.Chord = if (input.isPad(key) or options.held) .{ .key = key } else .{ .key = key, .mods = .{ .ctrl = m.ctrl, .shift = m.shift, .alt = m.alt, .super = m.super } };
                 changed = if (chord.*) |old| !old.eql(picked) else true;
                 chord.* = picked;
             }
@@ -89,9 +91,9 @@ pub fn listeningForKeys() bool {
     return raw("ImGui_GetFrameCount")() - last_frame <= 1;
 }
 
-fn pressedKey() ?input.Key {
+fn pressedKey(modifiers: bool) ?input.Key {
     for (std.enums.values(input.Key)) |key| {
-        if (input.isModifier(key)) continue;
+        if (!modifiers and input.isModifier(key)) continue;
         if (raw("ImGui_IsKeyPressedEx")(imguiKey(key), false)) return key;
     }
     return null;

@@ -337,6 +337,11 @@ pub const Chord = struct {
         return !isPad(self.key) or self.matches(self.key, .{});
     }
 
+    /// For a held key, which takes no modifiers but can be one, like Shift.
+    pub fn isValidHeld(self: Chord) bool {
+        return self.matches(self.key, .{});
+    }
+
     /// Like `Ctrl+Shift+f8`.
     pub fn format(self: Chord, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         if (self.mods.ctrl) try writer.writeAll("Ctrl+");
@@ -363,6 +368,8 @@ test "controller chords" {
     try std.testing.expect(!(Chord{ .key = .gamepad_back, .mods = .{ .ctrl = true } }).isValid());
     try std.testing.expect(!(Chord{ .key = .left_ctrl }).isValid());
     try std.testing.expect((Chord{ .key = .f8, .mods = .{ .alt = true } }).isValid());
+    try std.testing.expect((Chord{ .key = .left_shift }).isValidHeld());
+    try std.testing.expect(!(Chord{ .key = .w, .mods = .{ .shift = true } }).isValidHeld());
 }
 
 test "pad buttons" {

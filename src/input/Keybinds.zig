@@ -29,6 +29,9 @@ pub const Action = struct {
     consume: bool = true,
     /// Also matches while ImGui takes text input.
     while_typing: bool = false,
+    /// A key that's held, like one to move with: it fires whatever modifiers are down too, and its
+    /// key can be a modifier itself, like Shift. Its chord has no modifiers.
+    held: bool = false,
 };
 
 pub const Error = error{
@@ -92,12 +95,22 @@ pub const Binding = struct {
     chord: Chord,
     consume: bool,
     while_typing: bool,
+    held: bool,
     ctx: ?*anyopaque,
     call: *const fn (ctx: ?*anyopaque, phase: Phase) void,
     subscription: TriggerEvent.Subscription = undefined,
 
     fn onTrigger(self: *Binding, trigger: Trigger) void {
         if (trigger.serial == self.serial) self.call(self.ctx, trigger.phase);
+    }
+
+    /// Whether `key` with `mods` held sets it off.
+    fn matches(self: *const Binding, key: @import("root.zig").Key, mods: @import("root.zig").Mods) bool {
+        return if (self.held) self.chord.key == key else self.chord.matches(key, mods);
+    }
+
+    fn valid(self: *const Binding, chord: Chord) bool {
+        return if (self.held) chord.isValidHeld() else chord.isValid();
     }
 
     /// Waits for its handler if it's running on another thread.
@@ -112,7 +125,7 @@ pub const Binding = struct {
 
     /// Counts from the next press. Any thread.
     pub fn rebind(self: *Binding, chord: Chord) error{InvalidChord}!void {
-        if (!chord.isValid()) return error.InvalidChord;
+        if (!self.valid(chord)) return error.InvalidChord;
         const k = self.keybinds;
         k.lock.lock();
         defer k.lock.unlock();
@@ -198,7 +211,7 @@ pub fn bindUnscoped(self: *Keybinds, action: Action, ctx: anytype, comptime func
 }
 
 fn bindRaw(self: *Keybinds, action: Action, ctx: ?*anyopaque, call: *const fn (?*anyopaque, Phase) void) Error!*Binding {
-    if (!action.chord.isValid()) return error.InvalidChord;
+    if (!(if (action.held) action.chord.isValidHeld() else action.chord.isValid())) return error.InvalidChord;
 
     const binding = try self.allocator.create(Binding);
     errdefer self.allocator.destroy(binding);
@@ -214,6 +227,7 @@ fn bindRaw(self: *Keybinds, action: Action, ctx: ?*anyopaque, call: *const fn (?
         .chord = action.chord,
         .consume = action.consume,
         .while_typing = action.while_typing,
+        .held = action.held,
         .ctx = ctx,
         .call = call,
     };
@@ -349,7 +363,7 @@ fn onKey(self: *Keybinds, key: @import("root.zig").Key, down: bool, repeat: bool
         defer self.lock.unlockShared();
         const typing = self.typing.load(.acquire);
         for (self.bindings.items) |b| {
-            if (!b.chord.matches(key, mods) or (typing and !b.while_typing)) continue;
+            if (!b.matches(key, mods) or (typing and !b.while_typing)) continue;
             self.press(&self.held, key, b.serial);
             consume = consume or b.consume;
         }
@@ -380,7 +394,7 @@ fn onPad(self: *Keybinds, update: *const Gamepads.Update) void {
             self.lock.lockShared();
             defer self.lock.unlockShared();
             for (self.bindings.items) |b| {
-                if (!b.chord.matches(key, .{})) continue;
+                if (!b.matches(key, .{})) continue;
                 self.press(&self.pad_held, key, b.serial);
                 consume = consume or b.consume;
             }
@@ -568,6 +582,30 @@ const tests = struct {
         rig.present();
         try testing.expectEqual(1, shared.presses);
         try testing.expectEqual(1, typed.presses);
+    }
+
+    test "held keys fire whatever else is down, and can be modifiers" {
+        var rig: Rig = undefined;
+        try rig.init();
+        defer rig.deinit();
+        rig.present();
+
+        var fast: Recorder = .{};
+        var ahead: Recorder = .{};
+        try rig.keybinds.bind(&rig.scope, .{ .id = "test.fast", .name = "Fast", .chord = .{ .key = .left_shift }, .held = true, .consume = false }, &fast, Recorder.onPhase);
+        try rig.keybinds.bind(&rig.scope, .{ .id = "test.ahead", .name = "Ahead", .chord = .{ .key = .w }, .held = true, .consume = false }, &ahead, Recorder.onPhase);
+        try testing.expectError(error.InvalidChord, rig.keybinds.bind(&rig.scope, .{ .id = "test.shift_w", .name = "Shift W", .chord = .{ .key = .w, .mods = .{ .shift = true } }, .held = true }, &ahead, Recorder.onPhase));
+
+        // Shift, then W while it's down
+        _ = rig.send(api.WM_KEYDOWN, 0x10, 1 | (0x2A << 16));
+        _ = rig.send(api.WM_KEYDOWN, 'W', 1);
+        _ = rig.send(api.WM_KEYUP, 'W', key_up_flags);
+        _ = rig.send(api.WM_KEYUP, 0x10, key_up_flags | (0x2A << 16));
+        rig.present();
+        try testing.expectEqual(1, fast.presses);
+        try testing.expectEqual(1, fast.releases);
+        try testing.expectEqual(1, ahead.presses);
+        try testing.expectEqual(1, ahead.releases);
     }
 
     test "bind errors and unbind" {
