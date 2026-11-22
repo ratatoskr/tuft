@@ -133,6 +133,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "tuft_imgui_c", .module = imgui_c },
         .{ .name = "tuft_arch", .module = arch },
         .{ .name = "tuft_input", .module = input },
+        .{ .name = "tuft_math", .module = math },
     });
     const imgui_mod = ctx.addModule("imgui", &.{
         .{ .name = "tuft_imgui_c", .module = imgui_c },

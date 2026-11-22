@@ -231,12 +231,12 @@ const tests = struct {
             var hovered: gizmo.MoveType = .none;
             var changed = false;
             // Camera 5 back from the origin, looking at it
-            const view: gizmo.Matrix = .{ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, -5, 1 };
+            const view: gizmo.Matrix = .translation(.init(0, 0, -5));
             const projection: gizmo.Matrix = blk: {
                 const f = 1.0 / @tan(std.math.degreesToRadians(30.0));
                 const n = 0.1;
                 const far = 100.0;
-                break :blk .{ f, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + n) / (n - far), -1, 0, 0, 2 * far * n / (n - far), 0 };
+                break :blk .{ .m = .{ f, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + n) / (n - far), -1, 0, 0, 2 * far * n / (n - far), 0 } };
             };
 
             fn run() !void {
@@ -265,11 +265,12 @@ const tests = struct {
         try testing.expectEqual(.move_screen, S.hovered);
         try testing.expect(S.changed);
         // Moved right on screen, so +x in the world
-        try testing.expect(S.model[12] > 0.1);
-        try testing.expectApproxEqAbs(0, S.model[13], 0.01);
+        const moved = S.model.getTranslation();
+        try testing.expect(moved.x > 0.1);
+        try testing.expectApproxEqAbs(0, moved.y, 0.01);
         const parts = gizmo.decompose(&S.model);
-        try testing.expectApproxEqAbs(S.model[12], parts.translation[0], 0.001);
-        for (S.model, gizmo.recompose(parts)) |a, b| try testing.expectApproxEqAbs(a, b, 0.0001);
+        try testing.expectApproxEqAbs(moved.x, parts.translation.x, 0.001);
+        try testing.expect(S.model.approxEql(gizmo.recompose(parts), 0.0001));
     }
 
     test "sequencer, graph and pen" {

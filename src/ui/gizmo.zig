@@ -6,10 +6,13 @@ const root = @import("root.zig");
 const c = root.c;
 const raw = root.raw;
 const Vec2 = root.Vec2;
+const math = @import("tuft_math");
+const Vec3 = math.Vec3;
 
-pub const Matrix = [16]f32;
+/// Row-major for row vectors, like ImGuizmo wants.
+pub const Matrix = math.Mat4;
 
-pub const identity: Matrix = .{ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+pub const identity: Matrix = .identity;
 
 /// Mix them, or use the sets below.
 pub const Operation = bitpack struct(u32) {
@@ -140,30 +143,30 @@ pub const ManipulateOptions = struct {
     /// Gets what this frame's drag did, on its own.
     delta: ?*Matrix = null,
     /// Units for translate, degrees for rotate, factor for scale. Only x counts for the last two.
-    snap: ?*const [3]f32 = null,
+    snap: ?*const Vec3 = null,
     /// Min and max corners of a box around the object, for `bounds`.
-    local_bounds: ?*const [6]f32 = null,
-    bounds_snap: ?*const [3]f32 = null,
+    local_bounds: ?*const [2]Vec3 = null,
+    bounds_snap: ?*const Vec3 = null,
 };
 
 /// True when `matrix` changed.
 pub fn manipulate(view: *const Matrix, projection: *const Matrix, operation: Operation, mode: Mode, matrix: *Matrix, options: ManipulateOptions) bool {
     return raw("ImGuizmo_Manipulate")(
-        view,
-        projection,
+        floats(view),
+        floats(projection),
         operation.int(),
         @backingInt(mode),
-        matrix,
-        if (options.delta) |d| d else null,
-        if (options.snap) |s| s else null,
-        if (options.local_bounds) |b| b else null,
-        if (options.bounds_snap) |s| s else null,
+        floats(matrix),
+        if (options.delta) |d| floats(d) else null,
+        if (options.snap) |s| floats(s) else null,
+        if (options.local_bounds) |b| floats(b) else null,
+        if (options.bounds_snap) |s| floats(s) else null,
     );
 }
 
 /// Camera cube. `length` is the camera's distance, `background` packed RGBA.
 pub fn viewManipulate(view: *Matrix, length: f32, pos: Vec2, size: Vec2, background: u32) void {
-    raw("ImGuizmo_ViewManipulate")(view, length, vec2(pos), vec2(size), background);
+    raw("ImGuizmo_ViewManipulate")(floats(view), length, vec2(pos), vec2(size), background);
 }
 
 pub fn isOver() bool {
@@ -175,8 +178,9 @@ pub fn isOverOperation(operation: Operation) bool {
 }
 
 /// `position` is world space.
-pub fn isOverPoint(position: *const [3]f32, radius: f32) bool {
-    return raw("ImGuizmo_IsOverPoint")(@constCast(position), radius);
+pub fn isOverPoint(position: Vec3, radius: f32) bool {
+    var p = position;
+    return raw("ImGuizmo_IsOverPoint")(floats(&p), radius);
 }
 
 pub fn isUsing() bool {
@@ -204,35 +208,35 @@ pub fn hoveredMoveType() MoveType {
 }
 
 pub const Components = struct {
-    translation: [3]f32 = .{ 0, 0, 0 },
+    translation: Vec3 = .zero,
     /// Degrees.
-    rotation: [3]f32 = .{ 0, 0, 0 },
-    scale: [3]f32 = .{ 1, 1, 1 },
+    rotation: Vec3 = .zero,
+    scale: Vec3 = .one,
 };
 
 pub fn decompose(matrix: *const Matrix) Components {
     var out: Components = .{};
-    raw("ImGuizmo_DecomposeMatrixToComponents")(matrix, &out.translation, &out.rotation, &out.scale);
+    raw("ImGuizmo_DecomposeMatrixToComponents")(floats(matrix), floats(&out.translation), floats(&out.rotation), floats(&out.scale));
     return out;
 }
 
 pub fn recompose(parts: Components) Matrix {
     var out: Matrix = undefined;
-    raw("ImGuizmo_RecomposeMatrixFromComponents")(&parts.translation, &parts.rotation, &parts.scale, &out);
+    raw("ImGuizmo_RecomposeMatrixFromComponents")(floats(&parts.translation), floats(&parts.rotation), floats(&parts.scale), floats(&out));
     return out;
 }
 
 pub fn drawGrid(view: *const Matrix, projection: *const Matrix, matrix: *const Matrix, size: f32) void {
-    raw("ImGuizmo_DrawGrid")(view, projection, matrix, size);
+    raw("ImGuizmo_DrawGrid")(floats(view), floats(projection), floats(matrix), size);
 }
 
 /// For trying it out.
 pub fn drawCubes(view: *const Matrix, projection: *const Matrix, matrices: []const Matrix) void {
-    raw("ImGuizmo_DrawCubes")(view, projection, @ptrCast(matrices.ptr), @intCast(matrices.len));
+    raw("ImGuizmo_DrawCubes")(floats(view), floats(projection), @ptrCast(@constCast(matrices.ptr)), @intCast(matrices.len));
 }
 
 pub fn drawAxes(view: *const Matrix, projection: *const Matrix, matrices: []const Matrix) void {
-    raw("ImGuizmo_DrawAxes")(view, projection, @ptrCast(matrices.ptr), @intCast(matrices.len));
+    raw("ImGuizmo_DrawAxes")(floats(view), floats(projection), @ptrCast(@constCast(matrices.ptr)), @intCast(matrices.len));
 }
 
 /// Like `ui.id`, for more than one in a window.
@@ -283,15 +287,20 @@ pub fn setPlaneLimit(value: f32) void {
 }
 
 pub const Ray = struct {
-    origin: [4]f32,
-    direction: [4]f32,
+    origin: math.Vec4,
+    direction: math.Vec4,
 };
 
 /// For picking. `rect` is the view's, in pixels.
 pub fn mouseRay(view: *const Matrix, projection: *const Matrix, mouse: Vec2, rect_pos: Vec2, rect_size: Vec2) Ray {
     var ray: Ray = undefined;
-    raw("ImGuizmo_ComputeMouseRay")(view, projection, vec2(mouse), vec2(rect_pos), vec2(rect_size), &ray.origin, &ray.direction);
+    raw("ImGuizmo_ComputeMouseRay")(view, projection, vec2(mouse), vec2(rect_pos), vec2(rect_size), floats(&ray.origin), floats(&ray.direction));
     return ray;
+}
+
+/// ImGuizmo takes plain `float*`, mutable even where it only reads.
+fn floats(p: anytype) [*c]f32 {
+    return @ptrCast(@constCast(p));
 }
 
 fn vec2(v: Vec2) c.ImVec2 {

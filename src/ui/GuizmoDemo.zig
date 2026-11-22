@@ -6,6 +6,7 @@ const std = @import("std");
 
 const ui = @import("root.zig");
 const gizmo = @import("gizmo.zig");
+const math = @import("tuft_math");
 const Sequencer = @import("Sequencer.zig");
 const GraphEditor = @import("GraphEditor.zig");
 const VectorEditor = @import("VectorEditor.zig");
@@ -59,11 +60,7 @@ const Scene = struct {
     hovered: bool = false,
 
     fn at(x: f32, y: f32, z: f32) gizmo.Matrix {
-        var m = gizmo.identity;
-        m[12] = x;
-        m[13] = y;
-        m[14] = z;
-        return m;
+        return .translation(.init(x, y, z));
     }
 };
 
@@ -83,18 +80,18 @@ fn drawGizmo(self: *GuizmoDemo) void {
     if (ui.slider("Cube", &picked, 0, s.cubes.len - 1)) s.picked = @intCast(picked);
     const model = &s.cubes[s.picked];
     var parts = gizmo.decompose(model);
-    var edited = ui.raw("ImGui_DragFloat3")(ui.str("Translation"), &parts.translation);
-    edited = ui.raw("ImGui_DragFloat3")(ui.str("Rotation"), &parts.rotation) or edited;
-    edited = ui.raw("ImGui_DragFloat3")(ui.str("Scale"), &parts.scale) or edited;
+    var edited = ui.drag("Translation", &parts.translation, 1);
+    edited = ui.drag("Rotation", &parts.rotation, 1) or edited;
+    edited = ui.drag("Scale", &parts.scale, 1) or edited;
     if (edited) model.* = gizmo.recompose(parts);
     ui.textDisabled("Drag the handles. Drag the cube in the corner to turn the camera", .{});
 
     const pos = ui.getCursorScreenPos();
     const size = ui.getContentRegionAvailPixels();
     if (size[0] < 10 or size[1] < 10) return;
-    if (s.view == null) s.view = lookAt(.{ 5, 4, camera_distance - 2 }, .{ 0, 0, 0 });
+    if (s.view == null) s.view = .lookAt(.init(5, 4, camera_distance - 2), .zero, .unit_y, .right);
     const v = &s.view.?;
-    const projection = perspective(45, size[0] / size[1], 0.1, 100);
+    const projection: gizmo.Matrix = .perspective(math.degToRad(45), size[0] / size[1], 0.1, 100, .right);
 
     gizmo.setDrawList(null);
     gizmo.setRect(pos, size);
@@ -107,12 +104,12 @@ fn drawGizmo(self: *GuizmoDemo) void {
         3 => .universal,
         else => .{ .bounds = true },
     };
-    const snap: [3]f32 = switch (s.operation) {
-        1 => .{ 15, 15, 15 },
-        2 => .{ 0.1, 0.1, 0.1 },
-        else => .{ 0.5, 0.5, 0.5 },
-    };
-    const bounds: [6]f32 = .{ -0.5, -0.5, -0.5, 0.5, 0.5, 0.5 };
+    const snap: math.Vec3 = .splat(switch (s.operation) {
+        1 => 15,
+        2 => 0.1,
+        else => 0.5,
+    });
+    const bounds: [2]math.Vec3 = .{ .splat(-0.5), .splat(0.5) };
     _ = gizmo.manipulate(v, &projection, operation, @fromBackingInt(@intCast(s.mode)), model, .{
         .snap = if (s.snap) &snap else null,
         .local_bounds = if (operation.bounds) &bounds else null,
@@ -122,35 +119,6 @@ fn drawGizmo(self: *GuizmoDemo) void {
 
     const mouse = ui.getMousePos();
     s.hovered = mouse[0] >= pos[0] and mouse[1] >= pos[1] and mouse[0] < pos[0] + size[0] and mouse[1] < pos[1] + size[1];
-}
-
-fn perspective(fov_degrees: f32, aspect: f32, near: f32, far: f32) gizmo.Matrix {
-    const f = 1 / @tan(std.math.degreesToRadians(fov_degrees) / 2);
-    return .{ f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) / (near - far), -1, 0, 0, 2 * far * near / (near - far), 0 };
-}
-
-fn lookAt(eye: @Vector(3, f32), target: @Vector(3, f32)) gizmo.Matrix {
-    const z = normalize(eye - target);
-    const x = normalize(cross(.{ 0, 1, 0 }, z));
-    const y = cross(z, x);
-    return .{
-        x[0],         y[0],         z[0],         0,
-        x[1],         y[1],         z[1],         0,
-        x[2],         y[2],         z[2],         0,
-        -dot(x, eye), -dot(y, eye), -dot(z, eye), 1,
-    };
-}
-
-fn dot(a: @Vector(3, f32), b: @Vector(3, f32)) f32 {
-    return @reduce(.Add, a * b);
-}
-
-fn cross(a: @Vector(3, f32), b: @Vector(3, f32)) @Vector(3, f32) {
-    return .{ a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0] };
-}
-
-fn normalize(a: @Vector(3, f32)) @Vector(3, f32) {
-    return a / @as(@Vector(3, f32), @splat(@sqrt(dot(a, a))));
 }
 
 const Clips = struct {

@@ -1,6 +1,7 @@
 //! Dear ImGui for Zig, for host and plugins. Only call inside a frame, on its thread.
 
 const std = @import("std");
+const math = @import("tuft_math");
 
 /// The dear_bindings C API.
 pub const c = @import("tuft_imgui_c");
@@ -619,12 +620,16 @@ pub fn slider(label: [:0]const u8, value: anytype, min: std.meta.Child(@TypeOf(v
     };
 }
 
-/// Drag box for an `f32` or `i32`. Double-click to type.
+/// Drag box for an `f32` or `i32`, or a row of them for a `Vec2`, `Vec3` or `Vec4` from tuft_math.
+/// Double-click to type.
 pub fn drag(label: [:0]const u8, value: anytype, speed: f32) bool {
     return switch (std.meta.Child(@TypeOf(value))) {
         f32 => raw("ImGui_DragFloatEx")(str(label), value, speed, 0, 0, str("%.3f"), 0),
         i32 => raw("ImGui_DragIntEx")(str(label), value, speed, 0, 0, str("%d"), 0),
-        else => |T| @compileError("ui.drag takes *f32 or *i32, not *" ++ @typeName(T)),
+        math.Vec2 => raw("ImGui_DragFloat2Ex")(str(label), @ptrCast(value), speed, 0, 0, str("%.3f"), 0),
+        math.Vec3 => raw("ImGui_DragFloat3Ex")(str(label), @ptrCast(value), speed, 0, 0, str("%.3f"), 0),
+        math.Vec4 => raw("ImGui_DragFloat4Ex")(str(label), @ptrCast(value), speed, 0, 0, str("%.3f"), 0),
+        else => |T| @compileError("ui.drag takes *f32, *i32 or a *Vec2, *Vec3 or *Vec4, not *" ++ @typeName(T)),
     };
 }
 
