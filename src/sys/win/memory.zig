@@ -131,10 +131,15 @@ fn protectionOf(flags: zwin.PAGE) sys.memory.Protection {
     return .no_access;
 }
 
+/// `error.InvalidAddress` if it isn't all mapped, like memory that's been freed.
 pub fn protect(addr: usize, len: usize, protection: sys.memory.Protection) !sys.memory.Protection {
     var old: zwin.PAGE = .{};
-    if (win.VirtualProtect(@ptrFromInt(addr), len, pageFlags(protection), &old) == zwin.BOOL.FALSE)
-        return zwin.unexpectedError(zwin.GetLastError());
+    if (win.VirtualProtect(@ptrFromInt(addr), len, pageFlags(protection), &old) == zwin.BOOL.FALSE) {
+        return switch (zwin.GetLastError()) {
+            .INVALID_ADDRESS, .NOACCESS => error.InvalidAddress,
+            else => |e| zwin.unexpectedError(e),
+        };
+    }
     return protectionOf(old);
 }
 
@@ -361,6 +366,14 @@ const tests = struct {
 
 test {
     _ = tests;
+}
+
+test "protecting memory that's gone says so" {
+    const page = try allocAny(page_size);
+    const at = @intFromPtr(page.ptr);
+    _ = try protect(at, page_size, .read);
+    free(page);
+    try std.testing.expectError(error.InvalidAddress, protect(at, page_size, .read_write));
 }
 
 test "regions and safe reads" {
