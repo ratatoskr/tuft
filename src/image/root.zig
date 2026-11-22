@@ -1,8 +1,11 @@
 //! Images as plain RGBA8 on the CPU. Decodes PNG, JPEG, BMP, TGA and GIF's first frame. Converts raw
-//! pixels and frame captures. Encodes PNG. It's all slow, so keep it off the render thread. Only
-//! needs libc, so plugins can use it too.
+//! pixels and frame captures. Encodes PNG, and EXR for HDR. It's all slow, so keep it off the render
+//! thread. Only needs libc, so plugins can use it too.
 
 const std = @import("std");
+
+/// An HDR frame as an EXR file, see `exr.zig`. Free it with the allocator given.
+pub const encodeExr = @import("exr.zig").encode;
 
 /// RGBA, 4 bytes a pixel, rows packed with the top one first.
 pub const Image = struct {
@@ -513,4 +516,5 @@ const tests = struct {
 
 test {
     _ = tests;
+    _ = @import("exr.zig");
 }
