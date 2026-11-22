@@ -24,6 +24,7 @@ Pre-release. Expect breaking changes.
 - Sees every file the game opens, and can change it or serve files from memory.
 - DLL injection, even x64 into WoW64, and proxy DLLs.
 - Game memory read by the types in a Salamander `.sal` schema, and its `[Sig]`s found.
+- Mono and IL2CPP reflection through the game's own runtime.
 - Image decoding and PNG encoding.
 
 ## Building
@@ -35,6 +36,8 @@ zig build test
 ```
 
 `zig build build-test` builds the test programs into `zig-out/bin` without running them, to run one on its own.
+
+`-Dmono-game=<folder>` or `-Dil2cpp-game=<folder>` also tests `tuft_managed` on an installed Unity game's runtime, started without the game. Games with Denuvo can't be tested this way, since it stops the runtime starting outside the game.
 
 Want to help? See [CONTRIBUTING.md](https://github.com/ratatoskr/.github/blob/main/CONTRIBUTING.md). Found a security problem? See [SECURITY.md](https://github.com/ratatoskr/.github/blob/main/SECURITY.md).
 

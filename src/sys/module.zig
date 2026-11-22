@@ -55,6 +55,8 @@ pub const findExport = native.findExport;
 pub const findOrdinal = native.findOrdinal;
 /// Pair with `unload`.
 pub const load = native.load;
+/// Like `load`, but the DLLs it needs come from its own folder first. Pair with `unload`.
+pub const loadBeside = native.loadBeside;
 /// Waits up to 5 seconds for the DLL's threads to exit.
 pub const unload = native.unload;
 /// Real system DLL, not a proxy. Stays loaded.

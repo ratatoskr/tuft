@@ -133,6 +133,13 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8) !usize {
     return @intFromPtr(handle);
 }
 
+pub fn loadBeside(allocator: std.mem.Allocator, path: []const u8) !usize {
+    const wide = try std.unicode.utf8ToUtf16LeAllocZ(allocator, path);
+    defer allocator.free(wide);
+    const handle = win.LoadLibraryExW(wide.ptr, null, win.LOAD_WITH_ALTERED_SEARCH_PATH) orelse return error.LoadFailed;
+    return @intFromPtr(handle);
+}
+
 /// Waits for its threads to exit first, since their last steps still run in its code. False if one was
 /// still going after the wait, so it's left loaded, since freeing it would crash that thread.
 pub fn unload(base: usize) bool {

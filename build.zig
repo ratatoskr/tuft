@@ -53,6 +53,28 @@ pub fn build(b: *std.Build) void {
         .{ .name = "tuft_mem", .module = mem },
         .{ .name = "salamander_schema", .module = salamander.module("salamander_schema") },
     });
+    // Mono and IL2CPP, through the game's own runtime
+    const managed = ctx.addModule("managed", &.{
+        .{ .name = "tuft_sys", .module = sys },
+    });
+    // Off unless pointed at an installed Unity game, since they start its runtime in the test
+    const ManagedKind = enum { mono, il2cpp };
+    inline for (.{ ManagedKind.mono, ManagedKind.il2cpp }) |kind| {
+        const game_options = b.addOptions();
+        game_options.addOption([]const u8, "game", b.option([]const u8, @tagName(kind) ++ "-game", "A Unity " ++ @tagName(kind) ++ " game's folder, to test tuft_managed on its runtime") orelse "");
+        game_options.addOption(ManagedKind, "kind", kind);
+        const game_tests = b.createModule(.{
+            .root_source_file = b.path("tests/managed_runtime.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "tuft_managed", .module = managed },
+                .{ .name = "tuft_sys", .module = sys },
+            },
+        });
+        game_tests.addOptions("build_options", game_options);
+        ctx.addTests("managed_" ++ @tagName(kind), game_tests);
+    }
     // Needs exec pages from `mem`
     ctx.addTests("arch_exec", b.createModule(.{
         .root_source_file = b.path("tests/arch.zig"),
@@ -191,6 +213,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "tuft_mem", .module = mem },
             .{ .name = "tuft_schema", .module = schema },
             .{ .name = "salamander_schema", .module = salamander.module("salamander_schema") },
+            .{ .name = "tuft_managed", .module = managed },
             .{ .name = "tuft_hook", .module = hook },
             .{ .name = "tuft_event", .module = event },
             .{ .name = "tuft_input", .module = input },
@@ -417,5 +440,5 @@ const module_names = [_][]const u8{
     "tuft",         "tuft_arch",  "tuft_sys",    "tuft_mem",      "tuft_hook",   "tuft_event",
     "tuft_window",  "tuft_input", "tuft_inject", "tuft_proxy",    "tuft_gfx",    "tuft_imgui",
     "tuft_imgui_c", "tuft_asm",   "tuft_ui",     "tuft_devtools", "tuft_schema", "tuft_text",
-    "tuft_image",   "tuft_vfs",   "tuft_math",
+    "tuft_image",   "tuft_vfs",   "tuft_math",   "tuft_managed",
 };

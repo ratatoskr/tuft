@@ -60,6 +60,8 @@ pub const tls = struct {
 pub const sync = struct {
     /// No allocation, no setup beyond `.{}`.
     pub const RwLock = native.sync.RwLock;
+    /// Hands itself to the longest waiter, which can be a thread or something of your own.
+    pub const Mutex = @import("mutex.zig");
     /// Wakes one waiter per `set`, like a thread waiting for rare work.
     pub const Signal = native.sync.Signal;
     pub const SharedList = @import("shared_list.zig").SharedList;
@@ -95,4 +97,5 @@ test {
     std.testing.refAllDecls(@This());
     _ = native;
     _ = @import("shared_list.zig");
+    _ = @import("mutex.zig");
 }

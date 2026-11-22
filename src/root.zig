@@ -17,6 +17,7 @@ pub const ui = @import("tuft_ui");
 pub const devtools = @import("tuft_devtools");
 pub const text = @import("tuft_text");
 pub const math = @import("tuft_math");
+pub const managed = @import("tuft_managed");
 
 /// Addresses that can hook themselves. The rest is in `mem`.
 pub const memory = hook.memory;

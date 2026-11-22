@@ -1,6 +1,7 @@
 //! Text for where something is, like `game.exe+0x10`, `[player.base]+8`, `kernel32.dll!Sleep`,
-//! `"odd-name.dll"+0x10` or `sig("48 8B 05 ??", Rip)`. Numbers are decimal unless they start
-//! with 0x or end in h, like `0FFh`. Names go to `Symbols`, and `(name)` is the same as `name`.
+//! `Game.Player:Update+0x3a`, `"odd-name.dll"+0x10` or `sig("48 8B 05 ??", Rip)`. Numbers are
+//! decimal unless they start with 0x or end in h, like `0FFh`. Names go to `Symbols`, and `(name)` is
+//! the same as `name`.
 //! Math is `+ - * / %`, with `* / %` first, wrapping like pointer math.
 
 const std = @import("std");
@@ -177,7 +178,13 @@ const Parser = struct {
 
     fn word(self: *Parser) []const u8 {
         const start = self.at;
-        while (self.at < self.text.len and isNameChar(self.text[self.at])) self.at += 1;
+        while (self.at < self.text.len) : (self.at += 1) {
+            const ch = self.text[self.at];
+            if (isNameChar(ch)) continue;
+            // `Class:Method`, as C# methods are named. Not `fs:[...]`
+            if (ch == ':' and self.at > start and self.at + 1 < self.text.len and isNameStart(self.text[self.at + 1])) continue;
+            break;
+        }
         return self.text[start..self.at];
     }
 
@@ -285,6 +292,7 @@ const tests = struct {
         fn resolve(_: ?*anyopaque, n: []const u8) ?usize {
             if (std.mem.eql(u8, n, "player.health")) return 0x1000;
             if (std.mem.eql(u8, n, "odd-name")) return 0x2000;
+            if (std.mem.eql(u8, n, "Game.Player:Update")) return 0x3000;
             return null;
         }
     };
@@ -314,6 +322,8 @@ const tests = struct {
         try expectEval(0x2000 - 2, "\"odd-name\" - 2", env);
         try expectEval(0x1000 - 0x10 + 3, "player.health - (0x10 - 3)", env);
         try expectEval(5, "-(-5)", env);
+        try expectEval(0x303a, "Game.Player:Update+0x3a", env);
+        try expectProblem("player.health:[8]", env, error.InvalidAddress, "didn't expect :[8]");
         try expectProblem("7FF6", env, error.InvalidAddress, "7FF6 isn't a number. Hex starts with 0x or ends in h, like 0x7FF6 or 7FF6h");
         try expectProblem("nobody+4", env, error.UnknownName, "there's no nobody");
         try expectProblem("4 4", env, error.InvalidAddress, "didn't expect 4");

@@ -29,6 +29,8 @@ pub extern "kernel32" fn GetModuleHandleW(lpModuleName: ?[*:0]const u16) callcon
 pub extern "kernel32" fn GetModuleFileNameW(hModule: ?HINSTANCE, lpFilename: [*:0]u16, nSize: DWORD) callconv(.winapi) DWORD;
 pub extern "kernel32" fn GetProcAddress(hModule: HINSTANCE, lpProcName: [*:0]const u8) callconv(.winapi) ?FARPROC;
 pub extern "kernel32" fn LoadLibraryW(lpLibFileName: [*:0]const u16) callconv(.winapi) ?HINSTANCE;
+pub extern "kernel32" fn LoadLibraryExW(lpLibFileName: [*:0]const u16, hFile: ?HANDLE, dwFlags: DWORD) callconv(.winapi) ?HINSTANCE;
+pub const LOAD_WITH_ALTERED_SEARCH_PATH: DWORD = 0x8;
 pub extern "kernel32" fn FreeLibrary(hLibModule: HINSTANCE) callconv(.winapi) BOOL;
 pub const GET_MODULE_HANDLE_EX_FLAG_PIN: DWORD = 0x1;
 pub const GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS: DWORD = 0x4;
