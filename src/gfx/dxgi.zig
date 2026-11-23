@@ -267,6 +267,9 @@ pub const PresentHook = struct {
         log.info("dxgi: the game made a swap chain ({s} " ++ name ++ ", {d}x{d}, format {d}, window 0x{x}); hooking its Present and ResizeBuffers", .{
             api, desc.buffer_desc.width, desc.buffer_desc.height, desc.buffer_desc.format, @intFromPtr(desc.output_window),
         });
+        // New swap chains start out SDR, whatever their format, till the game says otherwise. Unreal
+        // draws SDR into 10 bits, for one
+        self.recordColorSpace(sc, COLOR_SPACE_RGB_FULL_G22_NONE_P709);
         self.watchSwapChain(sc);
     }
 
@@ -360,20 +363,25 @@ pub const PresentHook = struct {
     fn onSetColorSpace1(self: *PresentHook, h: *hook.TypedHook(SetColorSpace1Fn), swap_chain: *SwapChain, color_space: u32) HRESULT {
         const hr = h.original()(swap_chain, color_space);
         if (com.succeeded(hr)) {
-            const slot = for (&self.color_spaces) |*s| {
-                if (s.swap_chain == swap_chain) break s;
-            } else blk: {
-                const s = &self.color_spaces[self.color_spaces_next];
-                self.color_spaces_next = (self.color_spaces_next + 1) % self.color_spaces.len;
-                break :blk s;
-            };
-            slot.* = .{ .swap_chain = swap_chain, .color_space = color_space };
+            self.recordColorSpace(swap_chain, color_space);
             if (self.tracker.current(swap_chain)) |f| f.color_space = self.colorSpaceOf(swap_chain);
         }
         return hr;
     }
 
-    /// If we attached late, 10-bit counts as HDR10 when the display is in HDR.
+    fn recordColorSpace(self: *PresentHook, swap_chain: *SwapChain, color_space: u32) void {
+        const slot = for (&self.color_spaces) |*s| {
+            if (s.swap_chain == swap_chain) break s;
+        } else blk: {
+            const s = &self.color_spaces[self.color_spaces_next];
+            self.color_spaces_next = (self.color_spaces_next + 1) % self.color_spaces.len;
+            break :blk s;
+        };
+        slot.* = .{ .swap_chain = swap_chain, .color_space = color_space };
+    }
+
+    /// What the game set, or SDR for one we saw made. If we attached late, 10-bit counts as HDR10
+    /// when the display is in HDR.
     fn colorSpaceOf(self: *PresentHook, swap_chain: *SwapChain) gfx.ColorSpace {
         var desc: SwapChainDesc = .{};
         if (!com.succeeded(swap_chain.getDesc(&desc))) return .srgb;
@@ -536,6 +544,13 @@ const tests = struct {
         defer twelve.destroy();
         try testing.expect(present.present1_hooks.len != 0);
         try testing.expect(present.resize1_hooks.len != 0);
+
+        // Seen made, so 10 bits is still SDR till the game sets HDR10, even on an HDR display
+        twelve.waitIdle();
+        try testing.expect(com.succeeded(twelve.swap_chain.resizeBuffers(0, 0, 0, FORMAT_R10G10B10A2_UNORM, 0)));
+        _ = twelve.present();
+        _ = twelve.present();
+        try testing.expectEqual(gfx.ColorSpace.srgb, recorder.last.?.color_space);
     }
 
     test "hooks a known swap chain" {
