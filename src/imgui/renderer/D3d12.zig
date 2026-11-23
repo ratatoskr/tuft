@@ -17,8 +17,11 @@ const hdr = @import("hdr.zig");
 const capture = @import("../capture.zig");
 
 const max_buffers = 16;
-/// The GPU is never more than a swap chain's worth of buffers behind.
-const frames_in_flight = max_buffers;
+/// ImGui keeps this many of each frame's vertex buffers, and makes its windows outside the game with
+/// this many buffers. More breaks some games' DXGI, like Visions of Mana's, which won't make the
+/// windows' swap chains then. `render` waits for the GPU to be this close behind, since a game's own
+/// swap chain can have more buffers than this.
+const frames_in_flight = 3;
 const srv_capacity = 64;
 
 state: *State,
@@ -40,6 +43,9 @@ const State = struct {
     buffers: [max_buffers]?*d3d12.Resource = @splat(null),
     buffer_fences: [max_buffers]u64 = @splat(0),
     buffer_count: u32 = 0,
+    /// The fence values of the last few draws, in the order ImGui reuses its buffers.
+    draw_fences: [frames_in_flight]u64 = @splat(0),
+    draw_at: u32 = 0,
     target_owner: ?*anyopaque = null,
     output: hdr.Output = .{},
     copies: [2]Copy = @splat(.{}),
@@ -303,7 +309,11 @@ pub fn render(self: *D3d12, frame: *const Frame, draw_data: *c.ImDrawData, captu
     }
     s.list.setRenderTarget(s.rtv(index));
     s.list.setDescriptorHeap(s.srv_heap);
+    // ImGui's about to reuse the buffers it drew from `frames_in_flight` draws ago
+    const slot = s.draw_at;
+    s.fence.wait(s.draw_fences[slot]);
     c.cImGui_ImplDX12_RenderDrawData(draw_data, @ptrCast(s.list));
+    s.draw_at = (slot + 1) % frames_in_flight;
     if (taking.contains(.after)) {
         s.list.transition(buffer, d3d12.RESOURCE_STATE_RENDER_TARGET, d3d12.RESOURCE_STATE_COPY_SOURCE);
         s.copies[1].record(s.list, buffer);
@@ -317,6 +327,7 @@ pub fn render(self: *D3d12, frame: *const Frame, draw_data: *c.ImDrawData, captu
     s.fence_value += 1;
     if (!com.succeeded(s.queue.signal(s.fence, s.fence_value))) return;
     s.buffer_fences[index] = s.fence_value;
+    s.draw_fences[slot] = s.fence_value;
     var it = taking.iterator();
     while (it.next()) |point| {
         const copy = &s.copies[@backingInt(point)];

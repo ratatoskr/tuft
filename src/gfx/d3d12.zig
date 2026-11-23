@@ -342,7 +342,7 @@ const DXGI_SWAP_EFFECT_FLIP_DISCARD: u32 = 4;
 const D3D12CreateDeviceFn = fn (adapter: ?*anyopaque, min_feature_level: u32, riid: *const Guid, out: *?*anyopaque) callconv(.winapi) HRESULT;
 const CreateDXGIFactory1Fn = fn (riid: *const Guid, out: *?*anyopaque) callconv(.winapi) HRESULT;
 
-const SwapChainDesc1 = extern struct {
+pub const SwapChainDesc1 = extern struct {
     width: u32,
     height: u32,
     format: u32,

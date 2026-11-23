@@ -254,8 +254,25 @@ pub const PresentHook = struct {
 
     fn onCreateSwapChainForHwnd(self: *PresentHook, h: *hook.TypedHook(CreateSwapChainForHwndFn), factory: *anyopaque, device: *anyopaque, window: tuft_window.Handle, desc: *const anyopaque, fullscreen: ?*const anyopaque, output: ?*anyopaque, out: *?*SwapChain) HRESULT {
         const hr = h.original()(factory, device, window, desc, fullscreen, output, out);
+        if (!com.succeeded(hr)) describeFailed(device, window, @ptrCast(@alignCast(desc)), fullscreen != null);
         self.created("CreateSwapChainForHwnd", hr, out.*);
         return hr;
+    }
+
+    /// What was asked for, since the error alone never says which part it didn't like.
+    fn describeFailed(device: *anyopaque, window: tuft_window.Handle, desc: *const d3d12.SwapChainDesc1, fullscreen: bool) void {
+        // A D3D12 swap chain is made on a queue, and only a direct one will do
+        const queue_type: ?u32 = if (com.query(device, &d3d12.IID_ID3D12CommandQueue)) |q| blk: {
+            defer com.release(q);
+            break :blk @as(*d3d12.CommandQueue, @ptrCast(q)).getDesc().type;
+        } else null;
+        log.info("dxgi: it asked for {d}x{d}, format {d}, {d} buffers, swap effect {d}, scaling {d}, alpha mode {d}, flags 0x{x}, samples {d}, usage 0x{x}{s}, on {s} (queue type {?d}), window 0x{x}", .{
+            desc.width,         desc.height,       desc.format,      desc.buffer_count, desc.swap_effect,
+            desc.scaling,       desc.alpha_mode,   desc.flags,       desc.sample_count, desc.buffer_usage,
+            if (fullscreen) ", fullscreen" else "",
+            if (queue_type != null) "a D3D12 queue" else "a device",
+            queue_type,         @intFromPtr(window),
+        });
     }
 
     fn created(self: *PresentHook, comptime name: []const u8, hr: HRESULT, swap_chain: ?*SwapChain) void {
@@ -380,8 +397,9 @@ pub const PresentHook = struct {
         slot.* = .{ .swap_chain = swap_chain, .color_space = color_space };
     }
 
-    /// What the game set, or SDR for one we saw made. If we attached late, 10-bit counts as HDR10
-    /// when the display is in HDR.
+    /// What the game set, else SDR. Only 16-bit float means HDR on its own, since plenty of games,
+    /// like Unreal ones, draw SDR into 10 bits. A game using HDR10 that we joined late shows as SDR
+    /// till it sets its colour space again.
     fn colorSpaceOf(self: *PresentHook, swap_chain: *SwapChain) gfx.ColorSpace {
         var desc: SwapChainDesc = .{};
         if (!com.succeeded(swap_chain.getDesc(&desc))) return .srgb;
@@ -390,12 +408,7 @@ pub const PresentHook = struct {
         } else null;
         return switch (desc.buffer_desc.format) {
             FORMAT_R16G16B16A16_FLOAT => .scrgb,
-            FORMAT_R10G10B10A2_UNORM => if (set) |cs|
-                (if (cs == COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) .hdr10 else .srgb)
-            else if (desc.output_window) |w|
-                (if (gfx.display.of(w).hdr) .hdr10 else .srgb)
-            else
-                .srgb,
+            FORMAT_R10G10B10A2_UNORM => if (set == COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) .hdr10 else .srgb,
             else => .srgb,
         };
     }
