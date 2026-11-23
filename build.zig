@@ -125,6 +125,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "tuft_hook", .module = hook },
     });
     const gfx = ctx.addModule("gfx", &.{
+        .{ .name = "tuft_arch", .module = arch },
         .{ .name = "tuft_sys", .module = sys },
         .{ .name = "tuft_hook", .module = hook },
         .{ .name = "tuft_window", .module = window },

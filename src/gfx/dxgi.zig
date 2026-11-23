@@ -170,6 +170,8 @@ pub const PresentHook = struct {
     /// Latest few color spaces games set.
     color_spaces: [8]struct { swap_chain: ?*SwapChain = null, color_space: u32 = 0 } = @splat(.{}),
     color_spaces_next: usize = 0,
+    /// `gfx.color_space_hint`'s version as of the last present that looked. Render thread.
+    hint_version: u32 = 0,
     /// D3D12 only.
     execute_hooks: HookSet(ExecuteCommandListsFn) = .{},
     execute_hook_failed: bool = false,
@@ -267,11 +269,9 @@ pub const PresentHook = struct {
             break :blk @as(*d3d12.CommandQueue, @ptrCast(q)).getDesc().type;
         } else null;
         log.info("dxgi: it asked for {d}x{d}, format {d}, {d} buffers, swap effect {d}, scaling {d}, alpha mode {d}, flags 0x{x}, samples {d}, usage 0x{x}{s}, on {s} (queue type {?d}), window 0x{x}", .{
-            desc.width,         desc.height,       desc.format,      desc.buffer_count, desc.swap_effect,
-            desc.scaling,       desc.alpha_mode,   desc.flags,       desc.sample_count, desc.buffer_usage,
-            if (fullscreen) ", fullscreen" else "",
-            if (queue_type != null) "a D3D12 queue" else "a device",
-            queue_type,         @intFromPtr(window),
+            desc.width,                             desc.height,                                             desc.format, desc.buffer_count,   desc.swap_effect,
+            desc.scaling,                           desc.alpha_mode,                                         desc.flags,  desc.sample_count,   desc.buffer_usage,
+            if (fullscreen) ", fullscreen" else "", if (queue_type != null) "a D3D12 queue" else "a device", queue_type,  @intFromPtr(window),
         });
     }
 
@@ -284,9 +284,6 @@ pub const PresentHook = struct {
         log.info("dxgi: the game made a swap chain ({s} " ++ name ++ ", {d}x{d}, format {d}, window 0x{x}); hooking its Present and ResizeBuffers", .{
             api, desc.buffer_desc.width, desc.buffer_desc.height, desc.buffer_desc.format, @intFromPtr(desc.output_window),
         });
-        // New swap chains start out SDR, whatever their format, till the game says otherwise. Unreal
-        // draws SDR into 10 bits, for one
-        self.recordColorSpace(sc, COLOR_SPACE_RGB_FULL_G22_NONE_P709);
         self.watchSwapChain(sc);
     }
 
@@ -350,6 +347,12 @@ pub const PresentHook = struct {
         present_depth += 1;
         if (present_depth != 1) return;
         self.tracker.presented();
+        // Before the frame goes out, so it's drawn with the new one
+        const hint = gfx.color_space_hint.version();
+        if (hint != self.hint_version) {
+            self.hint_version = hint;
+            if (self.tracker.current(swap_chain)) |f| f.color_space = self.colorSpaceOf(swap_chain);
+        }
         self.tracker.present(swap_chain);
     }
 
@@ -397,9 +400,9 @@ pub const PresentHook = struct {
         slot.* = .{ .swap_chain = swap_chain, .color_space = color_space };
     }
 
-    /// What the game set, else SDR. Only 16-bit float means HDR on its own, since plenty of games,
-    /// like Unreal ones, draw SDR into 10 bits. A game using HDR10 that we joined late shows as SDR
-    /// till it sets its colour space again.
+    /// What the game set, else what its plugin says, else SDR. Only 16-bit float means HDR on its
+    /// own, since plenty of games, like Unreal ones, draw SDR into 10 bits. A game using HDR10 that
+    /// we joined late shows as SDR till it sets its colour space again or its plugin says.
     fn colorSpaceOf(self: *PresentHook, swap_chain: *SwapChain) gfx.ColorSpace {
         var desc: SwapChainDesc = .{};
         if (!com.succeeded(swap_chain.getDesc(&desc))) return .srgb;
@@ -408,7 +411,9 @@ pub const PresentHook = struct {
         } else null;
         return switch (desc.buffer_desc.format) {
             FORMAT_R16G16B16A16_FLOAT => .scrgb,
-            FORMAT_R10G10B10A2_UNORM => if (set == COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) .hdr10 else .srgb,
+            FORMAT_R10G10B10A2_UNORM => if (set) |cs|
+                (if (cs == COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) .hdr10 else .srgb)
+            else if (gfx.color_space_hint.get() == .hdr10) .hdr10 else .srgb,
             else => .srgb,
         };
     }
@@ -607,9 +612,20 @@ const tests = struct {
         _ = owned.present();
         try testing.expectEqual(gfx.ColorSpace.scrgb, recorder.last.?.color_space);
 
-        // HDR10, if the display supports it
+        // 10 bits we didn't see made is SDR, unless the game's plugin says it's HDR10
         owned.waitIdle();
         try testing.expect(com.succeeded(owned.swap_chain.resizeBuffers(0, 0, 0, FORMAT_R10G10B10A2_UNORM, 0)));
+        _ = owned.present();
+        try testing.expectEqual(gfx.ColorSpace.srgb, recorder.last.?.color_space);
+        gfx.color_space_hint.set(.hdr10);
+        defer gfx.color_space_hint.set(null);
+        _ = owned.present();
+        try testing.expectEqual(gfx.ColorSpace.hdr10, recorder.last.?.color_space);
+        gfx.color_space_hint.set(null);
+        _ = owned.present();
+        try testing.expectEqual(gfx.ColorSpace.srgb, recorder.last.?.color_space);
+
+        // HDR10 the game sets, if the display supports it
         const set = method(owned.swap_chain, set_color_space1_index, SetColorSpace1Fn);
         if (com.succeeded(set(owned.swap_chain, COLOR_SPACE_RGB_FULL_G2084_NONE_P2020))) {
             _ = owned.present();

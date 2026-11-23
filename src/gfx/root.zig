@@ -63,6 +63,33 @@ pub const Frame = extern struct {
     color_space: ColorSpace = .srgb,
 };
 
+/// What a game or game engine plugin says the game's output is, like Unreal saying HDR's on. For
+/// when the swap chain can't say, like a 10-bit one we joined late: what the game set on it itself
+/// still wins. Any thread.
+pub const color_space_hint = struct {
+    const Atomic = @import("tuft_arch").atomic.Value;
+    const none = std.math.maxInt(u32);
+
+    var value: Atomic(u32) = .init(none);
+    var changes: Atomic(u32) = .init(0);
+
+    /// Null forgets it.
+    pub fn set(space: ?ColorSpace) void {
+        const v: u32 = if (space) |s| @backingInt(s) else none;
+        if (value.swap(v, .acq_rel) != v) _ = changes.fetchAdd(1, .acq_rel);
+    }
+
+    pub fn get() ?ColorSpace {
+        const v = value.load(.acquire);
+        return if (v == none) null else @fromBackingInt(@intCast(v));
+    }
+
+    /// Goes up each time it changes, so a path can tell it should look again.
+    pub fn version() u32 {
+        return changes.load(.acquire);
+    }
+};
+
 pub const ColorSpace = enum(u32) {
     /// SDR, sRGB-encoded. 1.0 is the display's white.
     srgb = 0,
