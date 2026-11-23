@@ -139,7 +139,8 @@ threadlocal var swap_depth: u32 = 0;
 /// The OpenGL path. Init `tuft_hook` first.
 pub const PresentHook = struct {
     allocator: std.mem.Allocator,
-    swap_hook: *hook.TypedHook(SwapBuffersFn),
+    /// A set of one, so it goes over an overlay that hooked it after we made ours.
+    swap_hooks: hook.set.HookSet(SwapBuffersFn) = .{},
     tracker: Tracker(Source),
 
     /// Hook starts disabled. Loads Windows' `opengl32.dll` if the game hasn't.
@@ -149,18 +150,19 @@ pub const PresentHook = struct {
 
         const self = try allocator.create(PresentHook);
         errdefer allocator.destroy(self);
-        self.* = .{ .allocator = allocator, .swap_hook = undefined, .tracker = .{ .listener = listener } };
-        self.swap_hook = try hook.memory.Address.at(address).createFn(SwapBuffersFn, onSwapBuffers, self);
+        self.* = .{ .allocator = allocator, .tracker = .{ .listener = listener } };
+        errdefer self.swap_hooks.destroy();
+        _ = try self.swap_hooks.add(address, onSwapBuffers, self);
         return self;
     }
 
     pub fn enable(self: *PresentHook) !void {
-        try self.swap_hook.enable();
+        try self.swap_hooks.enable();
     }
 
     /// Unhooks, waiting for swaps in flight.
     pub fn destroy(self: *PresentHook) void {
-        self.swap_hook.destroy();
+        self.swap_hooks.destroy();
         self.tracker.deinit();
         self.allocator.destroy(self);
     }

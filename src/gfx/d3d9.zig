@@ -523,7 +523,7 @@ pub const PresentHook = struct {
     fn addLocked(self: *PresentHook, comptime F: type, set: *HookSet(F), address: usize, comptime callback: anytype, comptime name: []const u8) void {
         const added = set.add(address, callback, self) catch |err| return log.warn("Couldn't hook the game's " ++ name ++ " at 0x{x}: {t}", .{ address, err });
         const h = added orelse return;
-        if (self.enabled) h.enable() catch |err| return log.warn("Couldn't hook the game's " ++ name ++ " at 0x{x}: {t}", .{ address, err });
+        if (self.enabled) set.enableHook(h) catch |err| return log.warn("Couldn't hook the game's " ++ name ++ " at 0x{x}: {t}", .{ address, err });
         log.debug("Hooked the game's " ++ name ++ " at 0x{x}", .{address});
     }
 
@@ -556,19 +556,19 @@ pub const PresentHook = struct {
         defer self.lock.unlock();
         const reset = com.vtableEntry(device, Device.reset_index);
         if (self.reset_hooks.add(reset, onReset, self)) |added| {
-            if (added) |h| if (self.enabled) enableLate(h.toHook(), reset);
+            if (added) |h| if (self.enabled) enableLate(&self.reset_hooks, h, reset);
         } else |err| log.warn("Couldn't hook the device's Reset at 0x{x}: {t}", .{ reset, err });
 
         const ex = com.query(device, &IID_IDirect3DDevice9Ex) orelse return;
         com.release(ex);
         const reset_ex = com.vtableEntry(device, Device.reset_ex_index);
         if (self.reset_ex_hooks.add(reset_ex, onResetEx, self)) |added| {
-            if (added) |h| if (self.enabled) enableLate(h.toHook(), reset_ex);
+            if (added) |h| if (self.enabled) enableLate(&self.reset_ex_hooks, h, reset_ex);
         } else |err| log.warn("Couldn't hook the device's ResetEx at 0x{x}: {t}", .{ reset_ex, err });
     }
 
-    fn enableLate(h: *hook.Hook, address: usize) void {
-        h.enable() catch |err| return log.warn("Couldn't hook the device's reset at 0x{x}: {t}", .{ address, err });
+    fn enableLate(set: anytype, h: anytype, address: usize) void {
+        set.enableHook(h) catch |err| return log.warn("Couldn't hook the device's reset at 0x{x}: {t}", .{ address, err });
         log.debug("Hooked the device's own reset at 0x{x} (a compatibility shim's?)", .{address});
     }
 

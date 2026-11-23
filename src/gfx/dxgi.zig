@@ -171,7 +171,7 @@ pub const PresentHook = struct {
     color_spaces: [8]struct { swap_chain: ?*SwapChain = null, color_space: u32 = 0 } = @splat(.{}),
     color_spaces_next: usize = 0,
     /// D3D12 only.
-    execute_hook: ?*hook.TypedHook(ExecuteCommandListsFn) = null,
+    execute_hooks: HookSet(ExecuteCommandListsFn) = .{},
     execute_hook_failed: bool = false,
     /// Direct queue the game last submitted on. We hold a ref.
     queue: ?*d3d12.CommandQueue = null,
@@ -290,7 +290,7 @@ pub const PresentHook = struct {
     fn addLocked(self: *PresentHook, comptime F: type, set: *HookSet(F), address: usize, comptime callback: anytype, comptime name: []const u8) void {
         const added = set.add(address, callback, self) catch |err| return log.warn("Couldn't hook the game's " ++ name ++ " at 0x{x}: {t}", .{ address, err });
         const h = added orelse return;
-        if (self.enabled) h.enable() catch |err| return log.warn("Couldn't hook the game's " ++ name ++ " at 0x{x}: {t}", .{ address, err });
+        if (self.enabled) set.enableHook(h) catch |err| return log.warn("Couldn't hook the game's " ++ name ++ " at 0x{x}: {t}", .{ address, err });
         log.debug("Hooked the game's " ++ name ++ " at 0x{x}", .{address});
     }
 
@@ -311,8 +311,7 @@ pub const PresentHook = struct {
         self.resize_hooks.destroy();
         self.resize1_hooks.destroy();
         self.color_space_hooks.destroy();
-        if (self.execute_hook) |h| h.destroy();
-        self.execute_hook = null;
+        self.execute_hooks.destroy();
     }
 
     fn onPresent(self: *PresentHook, h: *hook.TypedHook(PresentFn), swap_chain: *SwapChain, sync_interval: u32, flags: u32) HRESULT {
@@ -410,7 +409,7 @@ pub const PresentHook = struct {
 
     /// With a ref. `error.NotReady` until the game has submitted on one.
     fn queueFor(self: *PresentHook, device: *d3d12.Device) !*d3d12.CommandQueue {
-        if (self.execute_hook == null) {
+        if (self.execute_hooks.len == 0) {
             if (self.execute_hook_failed) return error.CantFindQueue;
             self.hookExecute(device) catch |err| {
                 self.execute_hook_failed = true;
@@ -432,10 +431,9 @@ pub const PresentHook = struct {
         const probe = try device.createCommandQueue(&.{});
         const address = com.vtableEntry(probe, 10);
         com.release(probe);
-        const h = try hook.memory.Address.at(address).createFn(ExecuteCommandListsFn, onExecuteCommandLists, self);
-        errdefer h.destroy();
-        try h.enable();
-        self.execute_hook = h;
+        errdefer self.execute_hooks.destroy();
+        _ = try self.execute_hooks.add(address, onExecuteCommandLists, self);
+        try self.execute_hooks.enable();
     }
 
     const Source = struct {
