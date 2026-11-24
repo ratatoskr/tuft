@@ -390,13 +390,20 @@ fn bitRow(self: *const AddressList, node: *const Node, at: usize) ?Row {
 /// each is from, like a plugin's name, shown next to its types. Empty ones and a short or empty
 /// `sources` show nothing. Rows made from the old ones are dropped.
 pub fn setSchemas(self: *AddressList, schemas: []const *const Schema, sources: []const []const u8) void {
+    self.setSchemasFrom(schemas, sources, &.{});
+}
+
+/// Like `setSchemas`, but types before `from[i]` in schema `i`'s source aren't offered, like ones
+/// every schema's read after. They can still be used.
+pub fn setSchemasFrom(self: *AddressList, schemas: []const *const Schema, sources: []const []const u8, from: []const usize) void {
     self.schemas = schemas;
     self.forgetRows();
     self.freeTypeNames();
     for (schemas, 0..) |s, i| {
         const source = if (i < sources.len) sources[i] else "";
+        const first = if (i < from.len) from[i] else 0;
         for (s.types) |t| {
-            if (t.nested or self.hasTypeName(t.name)) continue;
+            if (t.nested or t.at < first or self.hasTypeName(t.name)) continue;
             switch (t.kind) {
                 .@"error", .func => continue,
                 else => {},
