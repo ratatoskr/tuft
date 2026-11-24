@@ -1,4 +1,4 @@
-//! What `[Sig("48 8B 05", Offset(3), Rip, Follow, Module("x.dll"), Section(".text"))]` says, as a
+//! What `[Sig("48 8B 05", Offset(3), Rip, Follow, Rel32, Module("x.dll"), Section(".text"))]` says, as a
 //! `mem.Sig`. `Module` and `Section` can also be annotations of their own. `[VirtualTable]` reads
 //! the same way.
 
@@ -29,7 +29,7 @@ pub fn of(annotations: []const sal.Annotation, namespace: ?[]const u8, which: []
     var len: usize = 0;
     for (a.args[1..]) |arg| {
         const step: ?mem.Sig.Step = switch (arg) {
-            .ident => |n| if (std.mem.eql(u8, n, "Rip")) .rip else if (std.mem.eql(u8, n, "Follow")) .follow else return error.BadStep,
+            .ident => |n| if (std.mem.eql(u8, n, "Rip")) .rip else if (std.mem.eql(u8, n, "Follow")) .follow else if (std.mem.eql(u8, n, "Rel32")) .rel32 else return error.BadStep,
             .call => |c| if (std.mem.eql(u8, c.name, "Offset")) blk: {
                 if (c.args.len != 1 or c.args[0] != .int) return error.BadStep;
                 break :blk .{ .offset = std.math.cast(isize, c.args[0].int) orelse return error.BadStep };
@@ -66,7 +66,7 @@ pub fn alloc(arena: std.mem.Allocator, annotations: []const sal.Annotation, name
 pub fn explain(err: Error) []const u8 {
     return switch (err) {
         error.NoPattern => "it starts with its bytes, like [Sig(\"48 8B 05 ?? ?? ?? ??\", Offset(3), Rip)]",
-        error.BadStep => "after the bytes come Offset(n), Rip, Follow, Module(\"x.dll\") or Section(\".text\")",
+        error.BadStep => "after the bytes come Offset(n), Rip, Follow, Rel32, Module(\"x.dll\") or Section(\".text\")",
         error.TooManySteps => "that's more steps than fit",
         error.BadModule => "Module takes a name, like Module(\"game.dll\")",
         error.BadSection => "Section takes a name, like Section(\".text\")",

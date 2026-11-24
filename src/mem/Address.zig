@@ -101,6 +101,14 @@ pub fn Generic(comptime Hooks: type) type {
             return self.moved(insn.resolveControlFlowTargetOf(&code, a));
         }
 
+        /// Where the 32-bit relative offset here points, from just past it. For when the
+        /// instruction it's in starts before what was matched.
+        pub fn rel32(self: Self) Self {
+            const a = self.unwrap() catch return self;
+            const rel = self.load(i32) catch |err| return self.failed(err);
+            return self.moved(a +% 4 +% @as(usize, @bitCast(@as(isize, rel))));
+        }
+
         pub fn unwrap(self: Self) !usize {
             return switch (self.state) {
                 .ok => |a| a,
@@ -218,6 +226,8 @@ const tests = struct {
         try std.testing.expectEqual(base + 0x17, try Address.at(base).rip().unwrap());
         try std.testing.expectEqual(base + 12 + 5, try Address.at(base + 7).rip().unwrap());
         try std.testing.expectEqual(base + 12 + 5, try Address.at(base + 7).follow().unwrap());
+        // The call's own rel32, from just past it
+        try std.testing.expectEqual(base + 12 + 5, try Address.at(base + 8).rel32().unwrap());
         try std.testing.expectEqual(base + 12, try Address.at(base + 12).follow().unwrap());
         try std.testing.expectError(error.NoAddressOperand, Address.at(base + 12).rip().unwrap());
     }

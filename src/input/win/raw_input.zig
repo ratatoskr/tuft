@@ -78,10 +78,35 @@ pub fn hidesAll(device: Device, hidden: Channels) bool {
     };
 }
 
+/// Mouse buttons and the wheel hidden on their own, when the rest of the mouse isn't.
+pub const Extra = struct {
+    /// A bit per `MouseButton`.
+    buttons: u8 = 0,
+    wheel: bool = false,
+};
+
+/// `usButtonFlags` bits, a down and an up for each button, then the wheels.
+const RI_MOUSE_WHEEL: u16 = 0x0400;
+const RI_MOUSE_HWHEEL: u16 = 0x0800;
+
 /// Other records are left alone.
-pub fn strip(record: []u8, hidden: Channels) void {
+pub fn strip(record: []u8, hidden: Channels, extra: Extra) void {
     if (record.len < mouse_size or std.mem.readInt(u32, record[0..4], .little) != RIM_TYPEMOUSE) return;
-    if (hidden.contains(.mouse_buttons)) @memset(record[28..36], 0); // usButtonFlags, usButtonData, ulRawButtons
+    if (hidden.contains(.mouse_buttons)) {
+        @memset(record[28..36], 0); // usButtonFlags, usButtonData, ulRawButtons
+    } else if (extra.buttons != 0 or extra.wheel) {
+        var flags = std.mem.readInt(u16, record[28..30], .little);
+        for (0..5) |i| if (extra.buttons & (@as(u8, 1) << @intCast(i)) != 0) {
+            flags &= ~(@as(u16, 0b11) << @intCast(2 * i));
+        };
+        if (extra.wheel and flags & (RI_MOUSE_WHEEL | RI_MOUSE_HWHEEL) != 0) {
+            flags &= ~(RI_MOUSE_WHEEL | RI_MOUSE_HWHEEL);
+            std.mem.writeInt(u16, record[30..32], 0, .little); // usButtonData, the wheel's turn
+        }
+        std.mem.writeInt(u16, record[28..30], flags, .little);
+        const raw = std.mem.readInt(u32, record[32..36], .little);
+        std.mem.writeInt(u32, record[32..36], raw & ~@as(u32, extra.buttons), .little);
+    }
     if (hidden.contains(.mouse_motion)) {
         // Zero movement, marked relative. An absolute record would jump to 0,0
         std.mem.writeInt(u16, record[24..26], 0, .little); // usFlags
@@ -90,15 +115,15 @@ pub fn strip(record: []u8, hidden: Channels) void {
 }
 
 /// Keeps records packed and aligned. Returns how many are left.
-pub fn filter(data: [*]u8, count: u32, hidden: Channels) u32 {
-    if (hidden.count() == 0) return count;
+pub fn filter(data: [*]u8, count: u32, hidden: Channels, extra: Extra) u32 {
+    if (hidden.count() == 0 and extra.buttons == 0 and !extra.wheel) return count;
     var records: Records = .{ .data = data, .left = count };
     var write: usize = 0;
     var kept: u32 = 0;
     while (records.next()) |record| {
         if (kindDevice(std.mem.readInt(u32, record[0..4], .little))) |device| {
             if (hidesAll(device, hidden)) continue;
-            strip(record, hidden);
+            strip(record, hidden, extra);
         }
         if (write != @intFromPtr(record.ptr) - @intFromPtr(data)) std.mem.copyForwards(u8, data[write..][0..record.len], record);
         write = std.mem.alignForward(usize, write + record.len, 8);
@@ -236,15 +261,15 @@ const tests = struct {
         off = record(&buf, off, RIM_TYPEMOUSE, 48, 0xA3);
 
         var copy = buf;
-        try testing.expectEqual(3, filter(&copy, 3, .empty));
+        try testing.expectEqual(3, filter(&copy, 3, .empty, .{}));
 
         copy = buf;
-        try testing.expectEqual(1, filter(&copy, 3, .initMany(&.{ .mouse_buttons, .mouse_motion })));
+        try testing.expectEqual(1, filter(&copy, 3, .initMany(&.{ .mouse_buttons, .mouse_motion }), .{}));
         try testing.expectEqual(RIM_TYPEKEYBOARD, std.mem.readInt(u32, copy[0..4], .little));
         try testing.expectEqual(0xB2, copy[35]);
 
         copy = buf;
-        try testing.expectEqual(2, filter(&copy, 3, .initOne(.keyboard)));
+        try testing.expectEqual(2, filter(&copy, 3, .initOne(.keyboard), .{}));
         try testing.expectEqual(0xA1, copy[47]);
         try testing.expectEqual(RIM_TYPEMOUSE, std.mem.readInt(u32, copy[48..52], .little));
         try testing.expectEqual(0xA3, copy[95]);
@@ -255,13 +280,29 @@ const tests = struct {
         _ = record(&buf, 0, RIM_TYPEMOUSE, 48, 0xA1);
         _ = record(&buf, 48, RIM_TYPEKEYBOARD, 40, 0xB2);
 
-        try testing.expectEqual(2, filter(&buf, 2, .initOne(.mouse_buttons)));
+        try testing.expectEqual(2, filter(&buf, 2, .initOne(.mouse_buttons), .{}));
         try testing.expectEqualSlices(u8, &@as([8]u8, @splat(0)), buf[28..36]); // buttons, wheel
         try testing.expectEqualSlices(u8, &@as([8]u8, @splat(0xA1)), buf[36..44]); // movement
         try testing.expectEqual(0xB2, buf[48 + 39]); // keyboard untouched
 
-        strip(buf[0..48], .initOne(.mouse_motion));
+        strip(buf[0..48], .initOne(.mouse_motion), .{});
         try testing.expectEqualSlices(u8, &@as([8]u8, @splat(0)), buf[36..44]);
+    }
+
+    test "strip one button and the wheel" {
+        var r: [mouse_size]u8 align(8) = @splat(0);
+        writeHeader(&r, RIM_TYPEMOUSE);
+        // Left down, right down and the wheel, in one record
+        std.mem.writeInt(u16, r[28..30], 0x0001 | 0x0004 | RI_MOUSE_WHEEL, .little);
+        std.mem.writeInt(u16, r[30..32], 120, .little);
+        std.mem.writeInt(u32, r[32..36], 0b11, .little);
+        strip(&r, .empty, .{ .buttons = 0b10 });
+        try testing.expectEqual(0x0001 | RI_MOUSE_WHEEL, std.mem.readInt(u16, r[28..30], .little));
+        try testing.expectEqual(120, std.mem.readInt(u16, r[30..32], .little));
+        try testing.expectEqual(0b01, std.mem.readInt(u32, r[32..36], .little));
+        strip(&r, .empty, .{ .wheel = true });
+        try testing.expectEqual(0x0001, std.mem.readInt(u16, r[28..30], .little));
+        try testing.expectEqual(0, std.mem.readInt(u16, r[30..32], .little));
     }
 
     test "held and release records" {

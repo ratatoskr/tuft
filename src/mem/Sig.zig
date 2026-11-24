@@ -20,13 +20,15 @@ section: []const u8 = ".text",
 
 pub const max_len = 256;
 
-/// In ZON it's `.rip`, `.follow` or `.{ .offset = n }`.
+/// In ZON it's `.rip`, `.follow`, `.rel32` or `.{ .offset = n }`.
 pub const Step = union(enum) {
     offset: isize,
     /// Where the instruction here points, see `tuft_mem.Address.rip`.
     rip,
     /// Through a jmp or call here, for thunks.
     follow,
+    /// Where the 32-bit relative offset here points, see `tuft_mem.Address.rel32`.
+    rel32,
 };
 
 /// `name` is what the scan gets logged as. Scans every time, keep the result.
@@ -58,6 +60,7 @@ pub fn from(self: Sig, name: []const u8, match: usize) Address {
         .offset => |n| a.offset(n),
         .rip => a.rip(),
         .follow => a.follow(),
+        .rel32 => a.rel32(),
     };
     _ = a.unwrap() catch |err| return failed(name, err);
     return a;
@@ -75,6 +78,7 @@ pub fn format(self: Sig, w: *std.Io.Writer) std.Io.Writer.Error!void {
         .offset => |n| try w.print(", Offset({d})", .{n}),
         .rip => try w.writeAll(", Rip"),
         .follow => try w.writeAll(", Follow"),
+        .rel32 => try w.writeAll(", Rel32"),
     };
     if (self.module) |m| try w.print(", Module(\"{s}\")", .{m});
     if (self.section.len > 0) try w.print(", Section(\"{s}\")", .{self.section});

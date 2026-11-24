@@ -216,7 +216,7 @@ const Parser = struct {
         return self.fail(miss.err, "{s}: {s}", .{ n, miss.message });
     }
 
-    /// `sig("48 8B ??", Rip, Follow, Offset(n), Module("x.dll"), Section(".data"))`. The whole
+    /// `sig("48 8B ??", Rip, Follow, Rel32, Offset(n), Module("x.dll"), Section(".data"))`. The whole
     /// image without a `Section`.
     fn sig(self: *Parser, start: usize) Error!usize {
         try self.expect('(');
@@ -243,12 +243,14 @@ const Parser = struct {
                 steps[n] = .rip;
             } else if (std.mem.eql(u8, step, "Follow")) {
                 steps[n] = .follow;
+            } else if (std.mem.eql(u8, step, "Rel32")) {
+                steps[n] = .rel32;
             } else if (std.mem.eql(u8, step, "Offset")) {
                 try self.expect('(');
                 steps[n] = .{ .offset = @bitCast(try self.sum()) };
                 try self.expect(')');
             } else {
-                return self.fail(error.InvalidAddress, "there's no step {s}. It's Rip, Follow, Offset(n), Module(\"x\") or Section(\".x\")", .{step});
+                return self.fail(error.InvalidAddress, "there's no step {s}. It's Rip, Follow, Rel32, Offset(n), Module(\"x\") or Section(\".x\")", .{step});
             }
             n += 1;
         }
@@ -430,7 +432,7 @@ const tests = struct {
         var problem: Problem = .{};
         try testing.expectError(error.NotFound, eval("sig(\"DE AD BE EF 13 37 C0 DE 13 37 C0 DE AA\", Module(\"kernel32.dll\"))", env, &problem));
         try testing.expectEqualStrings("sig(\"DE AD BE EF 13 37 C0 DE 13 37 C0 DE AA\", Module(\"kernel32.dll\")) wasn't found", problem.message());
-        try expectProblem("sig(\"90\", Bogus)", env, error.InvalidAddress, "there's no step Bogus. It's Rip, Follow, Offset(n), Module(\"x\") or Section(\".x\")");
+        try expectProblem("sig(\"90\", Bogus)", env, error.InvalidAddress, "there's no step Bogus. It's Rip, Follow, Rel32, Offset(n), Module(\"x\") or Section(\".x\")");
     }
 };
 

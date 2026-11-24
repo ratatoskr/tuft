@@ -15,6 +15,7 @@ pub const Device = @import("root.zig").Device;
 pub const Devices = @import("root.zig").Devices;
 pub const Channel = @import("root.zig").Channel;
 pub const Channels = @import("root.zig").Channels;
+pub const MouseButton = @import("root.zig").MouseButton;
 
 pub const Backend = switch (builtin.os.tag) {
     .windows => @import("win/blocker.zig"),
@@ -30,6 +31,11 @@ subscriptions: tuft_event.Scope,
 captured_bits: std.atomic.Value(u8) = .init(0),
 /// Devices the next release task lets go of.
 pending_release: std.atomic.Value(u8) = .init(0),
+/// Mouse buttons whose presses are hidden from the game, by `MouseButton` bit, see `consumeButtons`.
+consume_buttons: std.atomic.Value(u8) = .init(0),
+/// Ones pressed while consumed, hidden till they're let go. The window thread writes.
+consumed_buttons: std.atomic.Value(u8) = .init(0),
+consume_wheel: std.atomic.Value(bool) = .init(false),
 
 /// Failed hooks get logged and skipped. Nothing is hidden until `capture`.
 pub fn create(allocator: std.mem.Allocator, window: *Window) !*Blocker {
@@ -84,6 +90,31 @@ pub fn isKeyHidden(self: *const Blocker, key: @import("root.zig").Key) bool {
     return self.backend.isKeyHidden(key);
 }
 
+/// Presses of these buttons are hidden from the game from now on, each till it's let go, while the
+/// rest of the mouse stays the game's. A bit per `MouseButton`. Any thread.
+pub fn consumeButtons(self: *Blocker, buttons: u8) void {
+    self.consume_buttons.store(buttons, .release);
+}
+
+/// Hides the wheel from the game. Any thread.
+pub fn consumeWheel(self: *Blocker, on: bool) void {
+    self.consume_wheel.store(on, .release);
+}
+
+pub fn buttonBit(button: MouseButton) u8 {
+    return @as(u8, 1) << @intCast(@backingInt(button));
+}
+
+/// Buttons hidden on their own right now, pressed while consumed or about to be. Any thread.
+pub fn hiddenButtons(self: *const Blocker) u8 {
+    if (bypassing) return 0;
+    return self.consume_buttons.load(.acquire) | self.consumed_buttons.load(.acquire);
+}
+
+pub fn hidesWheel(self: *const Blocker) bool {
+    return !bypassing and (self.consume_wheel.load(.acquire) or self.captured().contains(.mouse_buttons));
+}
+
 pub fn isBypassing() bool {
     return bypassing;
 }
@@ -114,6 +145,7 @@ pub const Bypass = struct {
 fn hide(self: *Blocker, m: *const Window.Message) ?isize {
     if (m.channel) |channel| {
         if (self.hides(channel)) return self.backend.swallowed(m.raw);
+        if (self.consumes(m)) return self.backend.swallowed(m.raw);
         // Pass it on, minus anything for hidden channels
         self.backend.stripMessage(m.raw);
         return null;
@@ -121,9 +153,43 @@ fn hide(self: *Blocker, m: *const Window.Message) ?isize {
     return self.backend.hideMessage(m.raw);
 }
 
+/// A consumed button's press, its release, or the wheel while it's consumed. Window thread.
+fn consumes(self: *Blocker, m: *const Window.Message) bool {
+    if (bypassing) return false;
+    const event = m.event orelse return false;
+    switch (event) {
+        .wheel => return self.consume_wheel.load(.acquire),
+        .mouse_button => |b| {
+            const bit = buttonBit(b.button);
+            const consumed = self.consumed_buttons.load(.acquire);
+            if (b.down) {
+                if (consumed & bit != 0) return true;
+                if (self.consume_buttons.load(.acquire) & bit == 0) return false;
+                self.consumed_buttons.store(consumed | bit, .release);
+                self.backend.setButtonHidden(b.button, true);
+                return true;
+            }
+            if (consumed & bit == 0) return false;
+            self.consumed_buttons.store(consumed & ~bit, .release);
+            self.backend.setButtonHidden(b.button, false);
+            return true;
+        },
+        else => return false,
+    }
+}
+
 fn observe(self: *Blocker, m: *const Window.Message) ?isize {
+    // The releases won't come once it's lost focus
+    if (m.event) |event| if (event == .focus and !event.focus) self.releaseConsumed();
     self.backend.observe(m.raw);
     return null;
+}
+
+fn releaseConsumed(self: *Blocker) void {
+    const consumed = self.consumed_buttons.swap(0, .acq_rel);
+    for (std.enums.values(MouseButton)) |b| {
+        if (consumed & buttonBit(b) != 0) self.backend.setButtonHidden(b, false);
+    }
 }
 
 fn requestRelease(self: *Blocker, devices: Devices) void {

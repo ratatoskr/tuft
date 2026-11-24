@@ -175,6 +175,7 @@ pub fn release(self: *DInput, devices: Devices) void {
 const Hidden = struct {
     channels: Channels,
     owner: *const Win32,
+    extra: @import("raw_input.zig").Extra = .{},
 
     fn key(self: Hidden, dik: u8) bool {
         if (self.channels.contains(.keyboard)) return true;
@@ -184,13 +185,18 @@ const Hidden = struct {
         return vk != 0 and vk < 256 and self.owner.isVkHidden(@intCast(vk));
     }
 
+    /// By `DIMOFS_BUTTON` index. The first five are ours, in the same order.
+    fn button(self: Hidden, index: usize) bool {
+        return self.channels.contains(.mouse_buttons) or (index < 5 and self.extra.buttons & (@as(u8, 1) << @intCast(index)) != 0);
+    }
+
     fn none(self: Hidden) bool {
-        return self.channels.count() == 0 and !self.owner.anyKeyHidden();
+        return self.channels.count() == 0 and !self.owner.anyKeyHidden() and self.extra.buttons == 0 and !self.extra.wheel;
     }
 };
 
 fn hiddenNow(self: *const DInput) Hidden {
-    return .{ .channels = self.owner.blocker.hidden(), .owner = self.owner };
+    return .{ .channels = self.owner.blocker.hidden(), .owner = self.owner, .extra = self.owner.extra() };
 }
 
 // Hooks
@@ -239,7 +245,10 @@ pub fn stripState(kind: Kind, state: []u8, hidden: Hidden) void {
                 return;
             }
             if (hidden.channels.contains(.mouse_motion)) @memset(state[0..mouse_wheel], 0);
-            if (hidden.channels.contains(.mouse_buttons)) @memset(state[mouse_wheel..], 0);
+            if (hidden.channels.contains(.mouse_buttons) or hidden.extra.wheel) @memset(state[mouse_wheel..mouse_buttons], 0);
+            for (state[mouse_buttons..], 0..) |*b, i| {
+                if (hidden.button(i)) b.* = 0;
+            }
         },
         .keyboard => {
             if (state.len != 256) {
@@ -265,8 +274,10 @@ fn hidesEvent(kind: Kind, offset: u32, hidden: Hidden) bool {
     return switch (kind) {
         .mouse => if (offset < mouse_wheel)
             hidden.channels.contains(.mouse_motion)
+        else if (offset < mouse_buttons)
+            hidden.channels.contains(.mouse_buttons) or hidden.extra.wheel
         else
-            hidden.channels.contains(.mouse_buttons),
+            hidden.button(offset - mouse_buttons),
         .keyboard => offset < 256 and hidden.key(@intCast(offset)),
         .other => false,
     };
@@ -349,6 +360,14 @@ const tests = struct {
         stripState(.mouse, &state, hiding(&owner, .initOne(.mouse_motion)));
         try testing.expectEqualSlices(u8, &@as([8]u8, @splat(0)), state[0..8]);
         try testing.expectEqualSlices(u8, full[8..], state[8..]);
+        // Just the right button and the wheel
+        state = full;
+        stripState(.mouse, &state, .{ .channels = .empty, .owner = &owner, .extra = .{ .buttons = 0b10, .wheel = true } });
+        try testing.expectEqualSlices(u8, full[0..8], state[0..8]);
+        try testing.expectEqualSlices(u8, &@as([4]u8, @splat(0)), state[8..12]);
+        try testing.expectEqual(0x7F, state[12]);
+        try testing.expectEqual(0, state[13]);
+        try testing.expectEqual(0x7F, state[14]);
     }
 
     test "keyboard state up" {

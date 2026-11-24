@@ -24,6 +24,7 @@ const Devices = @import("../root.zig").Devices;
 const Channels = @import("../root.zig").Channels;
 const PadButton = @import("../root.zig").PadButton;
 const PadButtons = @import("../root.zig").PadButtons;
+const MouseButton = @import("../root.zig").MouseButton;
 
 const log = std.log.scoped(.tuft_input);
 
@@ -147,6 +148,10 @@ pub fn stripMessage(self: *Win32, m: *tuft_window.Message) void {
     if (m.msg < win.WM_MOUSEMOVE or m.msg > win.WM_MOUSEHWHEEL) return;
     var hidden: usize = 0;
     if (self.blocker.hides(.mouse_buttons)) hidden |= win.MK_LBUTTON | win.MK_RBUTTON | win.MK_MBUTTON | win.MK_XBUTTON1 | win.MK_XBUTTON2;
+    const own = self.blocker.hiddenButtons();
+    for (std.enums.values(MouseButton), [_]usize{ win.MK_LBUTTON, win.MK_RBUTTON, win.MK_MBUTTON, win.MK_XBUTTON1, win.MK_XBUTTON2 }) |b, mk| {
+        if (own & Blocker.buttonBit(b) != 0) hidden |= mk;
+    }
     if (self.blocker.hides(.keyboard)) hidden |= win.MK_SHIFT | win.MK_CONTROL;
     m.wparam &= ~hidden;
 }
@@ -255,6 +260,32 @@ pub fn setKeyHidden(self: *Win32, key: @import("../root.zig").Key, hide: bool) v
     } else {
         _ = self.hidden_keys[vk / 64].fetchAnd(~bit, .acq_rel);
     }
+}
+
+/// For polling, like `GetAsyncKeyState(VK_RBUTTON)`.
+pub fn setButtonHidden(self: *Win32, button: MouseButton, hide: bool) void {
+    const vk = vkOfButton(button);
+    const bit = @as(u64, 1) << @intCast(vk % 64);
+    if (hide) {
+        _ = self.hidden_keys[vk / 64].fetchOr(bit, .acq_rel);
+    } else {
+        _ = self.hidden_keys[vk / 64].fetchAnd(~bit, .acq_rel);
+    }
+}
+
+fn vkOfButton(button: MouseButton) u8 {
+    return switch (button) {
+        .left => 0x01,
+        .right => 0x02,
+        .middle => 0x04,
+        .x1 => 0x05,
+        .x2 => 0x06,
+    };
+}
+
+/// What raw input and DirectInput hide on top of whole channels.
+pub fn extra(self: *const Win32) raw_input.Extra {
+    return .{ .buttons = self.blocker.hiddenButtons(), .wheel = self.blocker.hidesWheel() };
 }
 
 pub fn isKeyHidden(self: *const Win32, key: @import("../root.zig").Key) bool {
@@ -379,7 +410,7 @@ fn getRawInputBuffer(self: *Win32, h: *hook.TypedHook(RawInputBufferFn), data: ?
     const buffer = data orelse return count;
     if (count == std.math.maxInt(u32)) return count;
 
-    const kept = raw_input.filter(buffer, count, self.blocker.hidden());
+    const kept = raw_input.filter(buffer, count, self.blocker.hidden(), self.extra());
 
     self.held_lock.lock();
     defer self.held_lock.unlock();
@@ -392,7 +423,7 @@ fn getRawInputData(self: *Win32, h: *hook.TypedHook(RawInputDataFn), handle: ?*a
     if (@intFromPtr(handle) != self.syntheticHandle() or self.synthetic_len == 0) {
         const len = h.original()(handle, command, data, size, header_size);
         if (command == raw_input.RID_INPUT and len != std.math.maxInt(u32) and data != null) {
-            raw_input.strip(@as([*]u8, @ptrCast(data.?))[0..len], self.blocker.hidden());
+            raw_input.strip(@as([*]u8, @ptrCast(data.?))[0..len], self.blocker.hidden(), self.extra());
         }
         return len;
     }
@@ -703,6 +734,37 @@ const tests = struct {
         var real: win.POINT = .{};
         _ = rig.blocker.backend.get_cursor_pos.?.original()(&real);
         try testing.expectEqual(real, seen);
+    }
+
+    test "consumed buttons and the wheel, the rest of the mouse still the game's" {
+        var rig: Rig = undefined;
+        try rig.init();
+        defer rig.deinit();
+        rig.present(); // attaches
+        const right = Blocker.buttonBit(.right);
+        rig.blocker.consumeButtons(right);
+        rig.blocker.consumeWheel(true);
+
+        _ = rig.send(win.WM_RBUTTONDOWN, win.MK_RBUTTON, 0x0014_000A);
+        _ = rig.send(win.WM_LBUTTONDOWN, win.MK_LBUTTON, 0x0014_000A);
+        _ = rig.send(win.WM_MOUSEWHEEL, 120 << 16, 0x0014_000A);
+        _ = rig.send(win.WM_MOUSEMOVE, win.MK_RBUTTON | win.MK_LBUTTON, 0x0015_000B);
+        try testing.expectEqual(0, Rig.game.count(win.WM_RBUTTONDOWN));
+        try testing.expectEqual(1, Rig.game.count(win.WM_LBUTTONDOWN));
+        try testing.expectEqual(0, Rig.game.count(win.WM_MOUSEWHEEL));
+        try testing.expectEqual(win.MK_LBUTTON, Rig.game.lastWparam(win.WM_MOUSEMOVE));
+        try testing.expectEqual(0, win.GetAsyncKeyState(0x02));
+
+        // Taken before it was let go, so its release is hidden too
+        rig.blocker.consumeButtons(0);
+        rig.blocker.consumeWheel(false);
+        _ = rig.send(win.WM_RBUTTONUP, 0, 0x0014_000A);
+        try testing.expectEqual(0, Rig.game.count(win.WM_RBUTTONUP));
+        try testing.expectEqual(0, rig.blocker.hiddenButtons());
+        _ = rig.send(win.WM_RBUTTONDOWN, win.MK_RBUTTON, 0x0014_000A);
+        _ = rig.send(win.WM_MOUSEWHEEL, 120 << 16, 0x0014_000A);
+        try testing.expectEqual(1, Rig.game.count(win.WM_RBUTTONDOWN));
+        try testing.expectEqual(1, Rig.game.count(win.WM_MOUSEWHEEL));
     }
 
     test "IME skips the game while the keyboard's ours" {

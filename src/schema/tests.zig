@@ -273,7 +273,7 @@ test "steps" {
     var p = try parsed(
         \\[game.Sig("90", Follow)] void a();
         \\[game.Sig("90", Offset(-2))] void b();
-        \\[game.Sig("90", Offset(3), Rip, Follow), game.Module("x.dll")] void c();
+        \\[game.Sig("90", Offset(3), Rip, Follow, Offset(1), Rel32), game.Module("x.dll")] void c();
         \\[other.Sig("90")] void d();
     , @sizeOf(usize));
     defer p.deinit();
@@ -282,7 +282,7 @@ test "steps" {
     try testing.expectEqualSlices(mem.Sig.Step, &.{.follow}, (try sigs.of(f[0].annotations, "game", "Sig", &steps)).?.resolve);
     try testing.expectEqualSlices(mem.Sig.Step, &.{.{ .offset = -2 }}, (try sigs.of(f[1].annotations, "game", "Sig", &steps)).?.resolve);
     const c = (try sigs.of(f[2].annotations, "game", "Sig", &steps)).?;
-    try testing.expectEqualSlices(mem.Sig.Step, &.{ .{ .offset = 3 }, .rip, .follow }, c.resolve);
+    try testing.expectEqualSlices(mem.Sig.Step, &.{ .{ .offset = 3 }, .rip, .follow, .{ .offset = 1 }, .rel32 }, c.resolve);
     try testing.expectEqualStrings("x.dll", c.module.?);
     try testing.expectEqualStrings(".text", c.section);
     try testing.expectEqual(null, try sigs.of(f[3].annotations, "game", "Sig", &steps));

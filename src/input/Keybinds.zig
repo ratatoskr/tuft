@@ -95,7 +95,8 @@ pub const Binding = struct {
     id: []u8,
     name: []u8,
     keys: Keys,
-    consume: bool,
+    /// Can change, see `setConsume`.
+    consume: std.atomic.Value(bool),
     while_typing: bool,
     held: bool,
     ctx: ?*anyopaque,
@@ -132,6 +133,11 @@ pub const Binding = struct {
         k.allocator.free(self.id);
         k.allocator.free(self.name);
         k.allocator.destroy(self);
+    }
+
+    /// Whether it hides its key from the game, from the next press. Any thread.
+    pub fn setConsume(self: *Binding, on: bool) void {
+        self.consume.store(on, .release);
     }
 
     /// Counts from the next press. Any thread.
@@ -240,7 +246,7 @@ fn bindRaw(self: *Keybinds, action: Action, ctx: ?*anyopaque, call: *const fn (?
         .id = id,
         .name = name,
         .keys = action.keys,
-        .consume = action.consume,
+        .consume = .init(action.consume),
         .while_typing = action.while_typing,
         .held = action.held,
         .ctx = ctx,
@@ -386,7 +392,7 @@ fn onKey(self: *Keybinds, key: @import("root.zig").Key, down: bool, repeat: bool
         for (self.bindings.items) |b| {
             if (!b.matches(key, mods) or (typing and !b.while_typing)) continue;
             self.press(&self.held, key, b.serial);
-            consume = consume or b.consume;
+            consume = consume or b.consume.load(.acquire);
         }
     }
     if (!consume) return false;
@@ -417,7 +423,7 @@ fn onPad(self: *Keybinds, update: *const Gamepads.Update) void {
             for (self.bindings.items) |b| {
                 if (!b.matches(key, .{})) continue;
                 self.press(&self.pad_held, key, b.serial);
-                consume = consume or b.consume;
+                consume = consume or b.consume.load(.acquire);
             }
         }
         if (!consume) continue;
