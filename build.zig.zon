@@ -18,20 +18,20 @@
             .hash = "salamander-0.0.1-6ZeDNr5FDgDufz9iUK_m86BLCKv1V2z5KPpA3g239Iym",
         },
         .vulkan_headers = .{
-            .url = "git+https://github.com/KhronosGroup/Vulkan-Headers?ref=v1.4.368#88487f687f3100ebe1d3559a8a34d971ee85b977",
-            .hash = "N-V-__8AAGrcigJk__pPsEdMgID-QhKWYAi-MHHn3sn5HOI6",
+            .url = "git+https://github.com/KhronosGroup/Vulkan-Headers?ref=v1.4.369#d277a0a3cda9c682708c93279f0c72cd6b0ae3f3",
+            .hash = "N-V-__8AAB5MiwIHZ-xzOzH98dswZMouQWfEZ1cimKD-hmEt",
         },
         .imgui = .{
             .url = "git+https://github.com/ocornut/imgui?ref=v1.93.0-docking#b916186e66aa3c02b72c6ca17455516512ed8049",
             .hash = "N-V-__8AAIcIiQBQX2RxQFLvaMZafdWRY_FqA7kql4vDWKb0",
         },
         .dear_bindings = .{
-            .url = "https://github.com/dearimgui/dear_bindings/releases/download/DearBindings_v0.28_ImGui_v1.93.0-docking/DearBindings_v0.28_ImGui_v1.93.0-docking.zip",
-            .hash = "N-V-__8AAP9jgASvx_ddsXQayWyyzjooPhEHdMrxN7zhADxi",
+            .url = "https://github.com/dearimgui/dear_bindings/releases/download/DearBindings_v0.29_ImGui_v1.93.0-docking/DearBindings_v0.29_ImGui_v1.93.0-docking.zip",
+            .hash = "N-V-__8AAGLZgAR042VqIB5Nv_Ivy8oB9ZzA4cQIwC4kpV1P",
         },
         .imguizmo = .{
-            .url = "git+https://github.com/cedricguillemet/imguizmo#105e4fde45e4e74aae8973d98750820ef7aca7e2",
-            .hash = "N-V-__8AALUZeADQ5El3nUvF-izKYeoNP6IiIDAfTyAJ2BEq",
+            .url = "git+https://github.com/cedricguillemet/imguizmo#5b473bc30438dc128520b90b688745bca85c4a91",
+            .hash = "N-V-__8AAKUbeACQBpRhNJ_YGOwUNWzQqdfHyjkGiM-YVaeF",
         },
         .implot = .{
             .url = "git+https://github.com/epezent/implot?ref=v1.1#819f200639455a58b6b3d4156b70e4271aeb2d00",
@@ -46,8 +46,8 @@
             .hash = "N-V-__8AAKTLBwDJqBaCpfJE7euS8iny9atzzOG_8eyyObPP",
         },
         .stb = .{
-            .url = "git+https://github.com/nothings/stb#9600522de53973336fa033a289858a4354cbb04c",
-            .hash = "N-V-__8AAKFQVQC4NjbzesYbaBSKdGJUM7BCrXWCSbndWXMK",
+            .url = "git+https://github.com/nothings/stb#6b5799bae8a1fe3792691ef4b72ae26434c3e799",
+            .hash = "N-V-__8AAMNjVQBtQqFTqLXf4ajZ6COgMe1AG_STJHG4jkdj",
         },
     },
 }
