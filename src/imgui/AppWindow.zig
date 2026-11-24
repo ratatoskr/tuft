@@ -5,6 +5,7 @@ const AppWindow = @This();
 const std = @import("std");
 
 const gfx = @import("tuft_gfx");
+const tuft_arch = @import("tuft_arch");
 const tuft_input = @import("tuft_input");
 const tuft_window = @import("tuft_window");
 const sys = @import("tuft_sys");
@@ -60,6 +61,8 @@ thread_id: std.atomic.Value(u32) = .init(0),
 frames: std.atomic.Value(u32) = .init(0),
 ticks: std.atomic.Value(u32) = .init(0),
 failure: ?anyerror = null,
+/// Its thread couldn't make the window, and stopped. `failure` says why. Any thread.
+failed_flag: tuft_arch.atomic.Value(bool) = .init(false),
 /// Drawn over its windows each frame while shown. Push from any thread. Needs tuft_ui bound.
 toasts: ui.Toasts = .{},
 
@@ -75,7 +78,8 @@ foreground: bool = false,
 raise_pending: bool = false,
 icons: [2]?*anyopaque = .{ null, null },
 
-/// Starts its thread and makes the window, hidden.
+/// Starts its thread, which makes the window, hidden. Doesn't wait for that, since the window and
+/// its graphics device take a while, so `failed` says later if it didn't work.
 pub fn create(allocator: std.mem.Allocator, options: Options) !*AppWindow {
     const self = try allocator.create(AppWindow);
     errdefer allocator.destroy(self);
@@ -96,17 +100,8 @@ pub fn create(allocator: std.mem.Allocator, options: Options) !*AppWindow {
     };
     self.options.ini_path = null;
 
-    const ready = win.CreateEventW(null, .TRUE, .FALSE, null) orelse return error.CreateEventFailed;
-    defer win.CloseHandle(ready);
-    var start: Start = .{ .self = self, .ready = ready };
     // Not std.Thread, its spawn fails on threads with an activation context
-    self.thread = win.CreateThread(null, 0, Start.run, &start, 0, null) orelse return error.CreateThreadFailed;
-    _ = win.WaitForSingleObject(ready, win.INFINITE);
-    if (self.failure) |err| {
-        _ = win.WaitForSingleObject(self.thread, win.INFINITE);
-        win.CloseHandle(self.thread);
-        return err;
-    }
+    self.thread = win.CreateThread(null, 0, Start.run, self, 0, null) orelse return error.CreateThreadFailed;
     return self;
 }
 
@@ -120,6 +115,12 @@ pub fn destroy(self: *AppWindow) void {
     self.allocator.free(self.title);
     if (self.ini_path) |p| self.allocator.free(p);
     self.allocator.destroy(self);
+}
+
+/// Its thread couldn't make the window, and stopped. `destroy` it. Any thread.
+pub fn failed(self: *const AppWindow) ?anyerror {
+    if (!self.failed_flag.load(.acquire)) return null;
+    return self.failure orelse error.Failed;
 }
 
 /// Any thread.
@@ -188,12 +189,8 @@ var threads: [8]std.atomic.Value(u32) = @splat(.init(0));
 // Its thread
 
 const Start = struct {
-    self: *AppWindow,
-    ready: win.HANDLE,
-
     fn run(param: ?*anyopaque) callconv(.winapi) win.DWORD {
-        const start: *Start = @ptrCast(@alignCast(param.?));
-        const self = start.self;
+        const self: *AppWindow = @ptrCast(@alignCast(param.?));
         const id = win.GetCurrentThreadId();
         self.thread_id.store(id, .release);
         for (&threads) |*slot| if (slot.cmpxchgStrong(0, id, .acq_rel, .acquire) == null) break;
@@ -210,11 +207,9 @@ const Start = struct {
         const context = self.open() catch |err| {
             self.failure = err;
             self.close(null);
-            // `start` is on the creator's stack, don't touch it after this
-            _ = win.SetEvent(start.ready);
+            self.failed_flag.store(true, .release);
             return 1;
         };
-        _ = win.SetEvent(start.ready);
         self.loop();
         self.close(context);
         return 0;
@@ -583,6 +578,19 @@ const tests = struct {
         }
     };
 
+    /// Till its thread's made the window. No GPU, like some CI machines, skips.
+    fn started(app: *AppWindow) !void {
+        for (0..5000) |_| {
+            if (app.failed()) |err| return switch (err) {
+                error.CreateDeviceFailed, error.NoD3D11 => error.SkipZigTest,
+                else => err,
+            };
+            if (app.tickCount() > 0) return;
+            sys.thread.sleepMs(1);
+        }
+        return error.TimedOut;
+    }
+
     fn waitFor(counter: *const std.atomic.Value(u32), at_least: u32) !void {
         for (0..3000) |_| {
             if (counter.load(.acquire) >= at_least) return;
@@ -597,12 +605,9 @@ const tests = struct {
         c.ImGui_SetCurrentContext(ours);
 
         var probe: Probe = .{};
-        const app = AppWindow.create(testing.allocator, .{ .title = "tuft test", .size = .{ 320, 200 }, .draw = .{ .ctx = &probe, .func = Probe.draw } }) catch |err| switch (err) {
-            // No GPU, like some CI machines
-            error.CreateDeviceFailed, error.NoD3D11 => return error.SkipZigTest,
-            else => return err,
-        };
+        const app = try AppWindow.create(testing.allocator, .{ .title = "tuft test", .size = .{ 320, 200 }, .draw = .{ .ctx = &probe, .func = Probe.draw } });
         defer app.destroy();
+        try started(app);
         try testing.expect(!app.isOpen());
         try waitFor(&app.ticks, 2);
         try testing.expectEqual(0, app.frameCount());
@@ -647,11 +652,9 @@ const tests = struct {
 
     test "floating pops every window out" {
         var probe: Floating = .{};
-        const app = AppWindow.create(testing.allocator, .{ .title = "tuft test", .floating = true, .draw = .{ .ctx = &probe, .func = Floating.draw } }) catch |err| switch (err) {
-            error.CreateDeviceFailed, error.NoD3D11 => return error.SkipZigTest,
-            else => return err,
-        };
+        const app = try AppWindow.create(testing.allocator, .{ .title = "tuft test", .floating = true, .draw = .{ .ctx = &probe, .func = Floating.draw } });
         defer app.destroy();
+        try started(app);
         app.show();
         try waitFor(&app.frames, 4);
         try testing.expect(probe.popped_out.load(.acquire));
@@ -665,11 +668,9 @@ const tests = struct {
 
     test "a hidden floating app comes back after another closes" {
         var probe: Floating = .{};
-        const app = AppWindow.create(testing.allocator, .{ .title = "tuft test", .floating = true, .draw = .{ .ctx = &probe, .func = Floating.draw } }) catch |err| switch (err) {
-            error.CreateDeviceFailed, error.NoD3D11 => return error.SkipZigTest,
-            else => return err,
-        };
+        const app = try AppWindow.create(testing.allocator, .{ .title = "tuft test", .floating = true, .draw = .{ .ctx = &probe, .func = Floating.draw } });
         defer app.destroy();
+        try started(app);
         app.show();
         try waitFor(&app.frames, 4);
         try testing.expect(probe.popped_out.load(.acquire));
@@ -693,11 +694,9 @@ const tests = struct {
 
     test "close button hides" {
         var probe: Probe = .{};
-        const app = AppWindow.create(testing.allocator, .{ .title = "tuft test", .size = .{ 320, 200 }, .draw = .{ .ctx = &probe, .func = Probe.draw } }) catch |err| switch (err) {
-            error.CreateDeviceFailed, error.NoD3D11 => return error.SkipZigTest,
-            else => return err,
-        };
+        const app = try AppWindow.create(testing.allocator, .{ .title = "tuft test", .size = .{ 320, 200 }, .draw = .{ .ctx = &probe, .func = Probe.draw } });
         defer app.destroy();
+        try started(app);
         app.show();
         try waitFor(&app.frames, 2);
         for (0..1000) |_| {
