@@ -51,6 +51,29 @@ pub fn focus(self: *HexView) void {
     self.take_focus = true;
 }
 
+/// Where it's scrolled to and what's picked, to keep another view in step.
+pub const Place = struct {
+    start: usize,
+    len: usize,
+    /// The first row on screen, once it's been drawn.
+    top: ?usize,
+    anchor: ?usize,
+    cursor: usize,
+};
+
+pub fn place(self: *const HexView) Place {
+    const drawn_top = if (self.drawn) |d| self.shown.start + d.first * bytes_per_row else null;
+    return .{ .start = self.shown.start, .len = self.shown.len, .top = self.scroll_to orelse drawn_top, .anchor = self.anchor, .cursor = self.cursor };
+}
+
+pub fn setPlace(self: *HexView, p: Place) void {
+    self.shown = .{ .start = p.start, .len = p.len };
+    self.anchor = p.anchor;
+    self.cursor = p.cursor;
+    self.nibble = null;
+    if (p.top) |t| self.scroll_to = t;
+}
+
 pub fn selection(self: *const HexView) ?Range {
     const a = self.anchor orelse return null;
     const lo = @min(a, self.cursor);

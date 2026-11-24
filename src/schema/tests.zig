@@ -275,6 +275,8 @@ test "steps" {
         \\[game.Sig("90", Offset(-2))] void b();
         \\[game.Sig("90", Offset(3), Rip, Follow, Offset(1), Rel32), game.Module("x.dll")] void c();
         \\[other.Sig("90")] void d();
+        \\[game.Sig("90", FirstMatch, Offset(1), Sources(Live, Disk))] void e();
+        \\[game.Sig("90", Sources(Cloud))] void g();
     , @sizeOf(usize));
     defer p.deinit();
     const f = p.schema.functions;
@@ -285,6 +287,13 @@ test "steps" {
     try testing.expectEqualSlices(mem.Sig.Step, &.{ .{ .offset = 3 }, .rip, .follow, .{ .offset = 1 }, .rel32 }, c.resolve);
     try testing.expectEqualStrings("x.dll", c.module.?);
     try testing.expectEqualStrings(".text", c.section);
+    try testing.expectEqual(false, c.first_match);
+    try testing.expectEqual(null, c.sources);
     try testing.expectEqual(null, try sigs.of(f[3].annotations, "game", "Sig", &steps));
     try testing.expect(try sigs.of(f[3].annotations, null, "Sig", &steps) != null);
+    const e = (try sigs.of(f[4].annotations, "game", "Sig", &steps)).?;
+    try testing.expect(e.first_match);
+    try testing.expectEqualSlices(mem.Sig.Step, &.{.{ .offset = 1 }}, e.resolve);
+    try testing.expectEqual(mem.originals.Sources{ .snapshot = false }, e.sources.?);
+    try testing.expectError(error.BadSources, sigs.of(f[5].annotations, "game", "Sig", &steps));
 }

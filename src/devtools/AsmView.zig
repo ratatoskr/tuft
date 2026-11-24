@@ -106,6 +106,28 @@ pub fn focus(self: *AsmView) void {
     self.take_focus = true;
 }
 
+/// Where it's scrolled to and what's picked, to keep another view in step. Not how long the picked
+/// instructions are, since another copy of the code might decode them differently.
+pub const Place = struct {
+    top: usize,
+    frac: f32,
+    anchor: ?usize,
+    cursor: usize,
+};
+
+pub fn place(self: *const AsmView) Place {
+    return .{ .top = self.top, .frac = self.scroll_frac, .anchor = if (self.anchor) |a| a.address else null, .cursor = self.cursor.address };
+}
+
+pub fn setPlace(self: *AsmView, p: Place) void {
+    self.editing = null;
+    self.top = p.top;
+    self.scroll_frac = p.frac;
+    self.anchor = if (p.anchor) |a| .{ .address = a, .len = 1 } else null;
+    self.cursor = .{ .address = p.cursor, .len = 1 };
+    self.moved = true;
+}
+
 pub fn selection(self: *const AsmView) ?Range {
     const a = self.anchor orelse return null;
     const lo = if (a.address <= self.cursor.address) a else self.cursor;

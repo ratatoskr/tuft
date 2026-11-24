@@ -25,7 +25,7 @@ pub const Env = struct {
 pub const Error = error{ NoAddress, InvalidAddress, UnknownName, Unreadable, NotFound };
 
 /// What went wrong, said plainly.
-pub const Problem = @import("tuft_text").Message(256);
+pub const Problem = @import("tuft_text").Message(512);
 
 /// Where `text` is now. Follows pointers and scans, so ask again later if things move.
 pub fn eval(text: []const u8, env: Env, problem: ?*Problem) Error!usize {
@@ -238,6 +238,24 @@ const Parser = struct {
                 try self.expect(')');
                 continue;
             }
+            if (std.mem.eql(u8, step, "FirstMatch")) {
+                s.first_match = true;
+                continue;
+            }
+            if (std.mem.eql(u8, step, "Sources")) {
+                try self.expect('(');
+                var sources: root.originals.Sources = .{ .live = false, .snapshot = false, .disk = false };
+                while (true) {
+                    self.skip();
+                    const which = self.word();
+                    const source = root.originals.parseLabel(which) orelse return self.fail(error.InvalidAddress, "there's no source {s}. It's Live, Snapshot or Disk", .{which});
+                    sources.set(source, true);
+                    if (!self.eat(',')) break;
+                }
+                try self.expect(')');
+                s.sources = sources;
+                continue;
+            }
             if (n == steps.len) return self.fail(error.InvalidAddress, "that's too many steps", .{});
             if (std.mem.eql(u8, step, "Rip")) {
                 steps[n] = .rip;
@@ -250,7 +268,7 @@ const Parser = struct {
                 steps[n] = .{ .offset = @bitCast(try self.sum()) };
                 try self.expect(')');
             } else {
-                return self.fail(error.InvalidAddress, "there's no step {s}. It's Rip, Follow, Rel32, Offset(n), Module(\"x\") or Section(\".x\")", .{step});
+                return self.fail(error.InvalidAddress, "there's no step {s}. It's Rip, Follow, Rel32, Offset(n), FirstMatch, Sources(..), Module(\"x\") or Section(\".x\")", .{step});
             }
             n += 1;
         }
@@ -432,7 +450,8 @@ const tests = struct {
         var problem: Problem = .{};
         try testing.expectError(error.NotFound, eval("sig(\"DE AD BE EF 13 37 C0 DE 13 37 C0 DE AA\", Module(\"kernel32.dll\"))", env, &problem));
         try testing.expectEqualStrings("sig(\"DE AD BE EF 13 37 C0 DE 13 37 C0 DE AA\", Module(\"kernel32.dll\")) wasn't found", problem.message());
-        try expectProblem("sig(\"90\", Bogus)", env, error.InvalidAddress, "there's no step Bogus. It's Rip, Follow, Rel32, Offset(n), Module(\"x\") or Section(\".x\")");
+        try expectProblem("sig(\"90\", Bogus)", env, error.InvalidAddress, "there's no step Bogus. It's Rip, Follow, Rel32, Offset(n), FirstMatch, Sources(..), Module(\"x\") or Section(\".x\")");
+        try expectProblem("sig(\"90\", Sources(Live, Cloud))", env, error.InvalidAddress, "there's no source Cloud. It's Live, Snapshot or Disk");
     }
 };
 

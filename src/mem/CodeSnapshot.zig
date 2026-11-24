@@ -79,13 +79,13 @@ pub fn find(self: *const CodeSnapshot, start: usize, len: usize) ?[*]const u8 {
 pub fn install(self: *CodeSnapshot) void {
     if (self.installed) return;
     current.store(self, .release);
-    self.previous = originals.setProvider(provide);
+    self.previous = originals.setProvider(.snapshot, provide);
     self.installed = true;
 }
 
 pub fn uninstall(self: *CodeSnapshot) void {
     if (!self.installed) return;
-    _ = originals.setProvider(self.previous);
+    _ = originals.setProvider(.snapshot, self.previous);
     _ = current.cmpxchgStrong(self, null, .acq_rel, .acquire);
     self.installed = false;
 }

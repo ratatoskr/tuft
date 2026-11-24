@@ -12,6 +12,7 @@ const scans = @import("scans.zig");
 const originals = @import("originals.zig");
 const Memory = @import("Memory.zig");
 const Pattern = pattern.Pattern;
+const AddressSource = originals.AddressSource;
 
 /// Chunk size when memory can't be scanned in place.
 const chunk_len = 16 * 1024;
@@ -25,8 +26,8 @@ pub fn Generic(comptime Hooks: type) type {
         start: usize,
         len: usize,
         memory: Memory = .local,
-        /// Scans the pre-hook copy, see `original`.
-        original_code: bool = false,
+        /// Which copy gets scanned, see `from`.
+        source: AddressSource = .live,
 
         pub fn fromSlice(slice: []const u8) Range {
             return .{ .start = @intFromPtr(slice.ptr), .len = slice.len };
@@ -40,19 +41,24 @@ pub fn Generic(comptime Hooks: type) type {
             return addr >= self.start and addr - self.start < self.len;
         }
 
-        /// Scans the pre-hook copy, so hooked code is still found. Local memory only.
-        pub fn original(self: Range) Range {
+        /// Scans another copy of the code, so code that's hooked now is still found. What's found
+        /// is where it is in live memory. Local memory only.
+        pub fn from(self: Range, source: AddressSource) Range {
             var copy = self;
-            copy.original_code = true;
+            copy.source = source;
             return copy;
+        }
+
+        /// The snapshot from before most hooks.
+        pub fn original(self: Range) Range {
+            return self.from(.snapshot);
         }
 
         /// Null means read in chunks.
         fn whole(self: Range) !?[]const u8 {
-            if (self.original_code) {
+            if (self.source != .live) {
                 if (!self.memory.isLocal()) return error.NoOriginalCopy;
-                const copy = originals.find(self.start, self.len) orelse return error.NoOriginalCopy;
-                return copy[0..self.len];
+                return originals.find(self.source, self.start, self.len) orelse error.NoOriginalCopy;
             }
             return self.memory.direct(self.start, self.len);
         }
@@ -71,16 +77,21 @@ pub fn Generic(comptime Hooks: type) type {
             return self.run(name, p, true);
         }
 
+        /// Takes the first match even if there are more.
+        pub fn scanPatternFirst(self: Range, name: []const u8, p: Pattern) Address {
+            return self.run(name, p, false);
+        }
+
         /// Returns how many. Not reported.
         pub fn findAll(self: Range, p: Pattern, out: []usize) !usize {
             const hay = try self.whole();
             var n: usize = 0;
-            var from: usize = 0;
+            var next: usize = 0;
             while (n < out.len) {
-                const hit = try self.find(hay, p, from) orelse break;
+                const hit = try self.find(hay, p, next) orelse break;
                 out[n] = hit;
                 n += 1;
-                from = hit - self.start + 1;
+                next = hit - self.start + 1;
             }
             return n;
         }
@@ -99,7 +110,8 @@ pub fn Generic(comptime Hooks: type) type {
                 .pattern = scans.format(p, &text),
                 .start = self.start,
                 .len = self.len,
-                .original = self.original_code,
+                .source = self.source,
+                .first_match = !unique,
                 .outcome = outcome,
                 .address = found,
                 .ns = sys.clock.nanos() -| started,
@@ -121,7 +133,7 @@ pub fn Generic(comptime Hooks: type) type {
         }
 
         fn result(self: Range, value: anyerror!usize) Address {
-            return .fromMemory(self.memory, value);
+            return Address.fromMemory(self.memory, value).withSource(self.source);
         }
 
         fn search(self: Range, p: Pattern, unique: bool, outcome: *scans.Outcome, found: *usize) !void {
@@ -131,12 +143,12 @@ pub fn Generic(comptime Hooks: type) type {
             outcome.* = if (unique and try self.find(hay, p, first - self.start + 1) != null) .not_unique else .found;
         }
 
-        fn find(self: Range, hay: ?[]const u8, p: Pattern, from: usize) !?usize {
-            if (hay) |h| return if (pattern.find(h, p, from)) |i| self.start + i else null;
+        fn find(self: Range, hay: ?[]const u8, p: Pattern, skip: usize) !?usize {
+            if (hay) |h| return if (pattern.find(h, p, skip)) |i| self.start + i else null;
             if (p.len == 0) return null;
             if (p.len > chunk_len) return error.PatternTooLong;
             var buf: [chunk_len]u8 = undefined;
-            var at = from;
+            var at = skip;
             var tried = false;
             var any = false;
             while (at < self.len and self.len - at >= p.len) {
@@ -261,10 +273,14 @@ test "original scans" {
     const range = Range.fromSlice(&Copies.live);
     try std.testing.expectError(error.NoOriginalCopy, range.original().scan("prologue", "48 89 5C 24").unwrap());
 
-    const previous = originals.setProvider(Copies.provide);
-    defer _ = originals.setProvider(previous);
+    const previous = originals.setProvider(.snapshot, Copies.provide);
+    defer _ = originals.setProvider(.snapshot, previous);
     try std.testing.expectError(error.PatternNotFound, range.scan("prologue", "48 89 5C 24").unwrap());
-    try std.testing.expectEqual(range.start, try range.original().scan("prologue", "48 89 5C 24").unwrap());
+    const found = range.original().scan("prologue", "48 89 5C 24");
+    try std.testing.expectEqual(range.start, try found.unwrap());
+    try std.testing.expectEqual(.snapshot, found.source);
+    // Steps read the copy it was found in, not the hooked live code
+    try std.testing.expectEqual(range.start +% 5 +% 0x08245C89, try found.offset(1).rel32().unwrap());
 }
 
 test "scans are reported" {

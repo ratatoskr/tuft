@@ -7,6 +7,8 @@ const addr_digits = std.fmt.comptimePrint("{d}", .{@sizeOf(usize) * 2});
 
 const insn = @import("tuft_arch").insn;
 const Memory = @import("Memory.zig");
+const originals = @import("originals.zig");
+const AddressSource = originals.AddressSource;
 
 pub const State = union(enum) {
     ok: usize,
@@ -24,6 +26,9 @@ pub fn Generic(comptime Hooks: type) type {
 
         state: State,
         memory: Memory = .local,
+        /// Which copy of the code it was worked out from. `rip`, `follow` and `rel32` read code
+        /// from that copy, since live code there might be hooked. Everything else reads `memory`.
+        source: AddressSource = .live,
 
         pub fn at(addr: usize) Self {
             return .{ .state = .{ .ok = addr } };
@@ -44,7 +49,7 @@ pub fn Generic(comptime Hooks: type) type {
         pub fn from(value: anytype) Self {
             const T = @TypeOf(value);
             if (T == Self) return value;
-            if (@typeInfo(T) == .@"struct" and @hasDecl(T, "is_address")) return .{ .state = value.state, .memory = value.memory };
+            if (@typeInfo(T) == .@"struct" and @hasDecl(T, "is_address")) return .{ .state = value.state, .memory = value.memory, .source = value.source };
             return switch (@typeInfo(T)) {
                 .int, .comptime_int => if (std.math.cast(usize, value)) |a| at(a) else fail(error.InvalidAddress),
                 .pointer => |p| if (p.size == .slice) at(@intFromPtr(value.ptr)) else at(@intFromPtr(value)),
@@ -57,11 +62,29 @@ pub fn Generic(comptime Hooks: type) type {
         }
 
         fn moved(self: Self, addr: usize) Self {
-            return .{ .state = .{ .ok = addr }, .memory = self.memory };
+            return .{ .state = .{ .ok = addr }, .memory = self.memory, .source = self.source };
         }
 
         fn failed(self: Self, err: anyerror) Self {
-            return .{ .state = .{ .err = err }, .memory = self.memory };
+            return .{ .state = .{ .err = err }, .memory = self.memory, .source = self.source };
+        }
+
+        /// The same, worked out from another copy of the code.
+        pub fn withSource(self: Self, source: AddressSource) Self {
+            var copy = self;
+            copy.source = source;
+            return copy;
+        }
+
+        /// Code at `a`, from the copy it was found in if that has it.
+        fn readCode(self: Self, a: usize, out: []u8) Memory.Error!void {
+            if (self.source != .live and self.memory.isLocal()) {
+                if (originals.find(self.source, a, out.len)) |copy| {
+                    @memcpy(out, copy);
+                    return;
+                }
+            }
+            return self.memory.read(a, out);
         }
 
         pub fn offset(self: Self, delta: isize) Self {
@@ -88,7 +111,7 @@ pub fn Generic(comptime Hooks: type) type {
         pub fn rip(self: Self) Self {
             const a = self.unwrap() catch return self;
             var code: [insn.max_len]u8 = undefined;
-            self.memory.read(a, &code) catch return self.failed(error.InvalidPointer);
+            self.readCode(a, &code) catch return self.failed(error.InvalidPointer);
             const target = insn.toStaticAddressOf(&code, a) catch |err| return self.failed(err);
             return if (target) |t| self.moved(t) else self.failed(error.NoAddressOperand);
         }
@@ -97,7 +120,7 @@ pub fn Generic(comptime Hooks: type) type {
         pub fn follow(self: Self) Self {
             const a = self.unwrap() catch return self;
             var code: [insn.max_len]u8 = undefined;
-            self.memory.read(a, &code) catch return self.failed(error.InvalidPointer);
+            self.readCode(a, &code) catch return self.failed(error.InvalidPointer);
             return self.moved(insn.resolveControlFlowTargetOf(&code, a));
         }
 
@@ -105,7 +128,9 @@ pub fn Generic(comptime Hooks: type) type {
         /// instruction it's in starts before what was matched.
         pub fn rel32(self: Self) Self {
             const a = self.unwrap() catch return self;
-            const rel = self.load(i32) catch |err| return self.failed(err);
+            var bytes: [4]u8 = undefined;
+            self.readCode(a, &bytes) catch return self.failed(error.InvalidPointer);
+            const rel = std.mem.readInt(i32, &bytes, .little);
             return self.moved(a +% 4 +% @as(usize, @bitCast(@as(isize, rel))));
         }
 

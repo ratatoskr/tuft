@@ -1,6 +1,6 @@
-//! What `[Sig("48 8B 05", Offset(3), Rip, Follow, Rel32, Module("x.dll"), Section(".text"))]` says, as a
-//! `mem.Sig`. `Module` and `Section` can also be annotations of their own. `[VirtualTable]` reads
-//! the same way.
+//! What `[Sig("48 8B 05", Offset(3), Rip, Follow, Rel32, FirstMatch, Sources(Live, Disk), Module("x.dll"),
+//! Section(".text"))]` says, as a `mem.Sig`. `Module` and `Section` can also be annotations of their
+//! own. `[VirtualTable]` reads the same way.
 
 const std = @import("std");
 const mem = @import("tuft_mem");
@@ -10,7 +10,7 @@ pub const names = [_][]const u8{ "Sig", "Module", "Section", "VirtualTable" };
 
 pub const max_steps = 8;
 
-pub const Error = error{ NoPattern, BadStep, TooManySteps, BadModule, BadSection };
+pub const Error = error{ NoPattern, BadStep, TooManySteps, BadModule, BadSection, BadSources };
 
 /// The one in `namespace`, or in any if it's null. Null if there's none.
 pub fn find(annotations: []const sal.Annotation, namespace: ?[]const u8, name: []const u8) ?*const sal.Annotation {
@@ -29,10 +29,22 @@ pub fn of(annotations: []const sal.Annotation, namespace: ?[]const u8, which: []
     var len: usize = 0;
     for (a.args[1..]) |arg| {
         const step: ?mem.Sig.Step = switch (arg) {
-            .ident => |n| if (std.mem.eql(u8, n, "Rip")) .rip else if (std.mem.eql(u8, n, "Follow")) .follow else if (std.mem.eql(u8, n, "Rel32")) .rel32 else return error.BadStep,
+            .ident => |n| if (std.mem.eql(u8, n, "Rip")) .rip else if (std.mem.eql(u8, n, "Follow")) .follow else if (std.mem.eql(u8, n, "Rel32")) .rel32 else if (std.mem.eql(u8, n, "FirstMatch")) blk: {
+                sig.first_match = true;
+                break :blk null;
+            } else return error.BadStep,
             .call => |c| if (std.mem.eql(u8, c.name, "Offset")) blk: {
                 if (c.args.len != 1 or c.args[0] != .int) return error.BadStep;
                 break :blk .{ .offset = std.math.cast(isize, c.args[0].int) orelse return error.BadStep };
+            } else if (std.mem.eql(u8, c.name, "Sources")) blk: {
+                var sources: mem.originals.Sources = .{ .live = false, .snapshot = false, .disk = false };
+                for (c.args) |s| {
+                    if (s != .ident) return error.BadSources;
+                    sources.set(mem.originals.parseLabel(s.ident) orelse return error.BadSources, true);
+                }
+                if (sources.none()) return error.BadSources;
+                sig.sources = sources;
+                break :blk null;
             } else if (std.mem.eql(u8, c.name, "Module")) blk: {
                 sig.module = try oneString(c.args, error.BadModule);
                 break :blk null;
@@ -66,10 +78,11 @@ pub fn alloc(arena: std.mem.Allocator, annotations: []const sal.Annotation, name
 pub fn explain(err: Error) []const u8 {
     return switch (err) {
         error.NoPattern => "it starts with its bytes, like [Sig(\"48 8B 05 ?? ?? ?? ??\", Offset(3), Rip)]",
-        error.BadStep => "after the bytes come Offset(n), Rip, Follow, Rel32, Module(\"x.dll\") or Section(\".text\")",
+        error.BadStep => "after the bytes come Offset(n), Rip, Follow, Rel32, FirstMatch, Sources(Live, Snapshot, Disk), Module(\"x.dll\") or Section(\".text\")",
         error.TooManySteps => "that's more steps than fit",
         error.BadModule => "Module takes a name, like Module(\"game.dll\")",
         error.BadSection => "Section takes a name, like Section(\".text\")",
+        error.BadSources => "Sources takes some of Live, Snapshot and Disk, like Sources(Live, Disk)",
     };
 }
 

@@ -205,7 +205,7 @@ pub const Made = struct {
 pub fn forAddress(arena: std.mem.Allocator, target: usize, options: Options) !?Made {
     const module = try Module.containing(target);
     const text = try module.text();
-    const code = originals.find(text.start, text.len) orelse
+    const code = originals.earliest(text.start, text.len) orelse
         Memory.local.direct(text.start, text.len) orelse return error.Unreadable;
     const found = try make(arena, code, text.start, target, options) orelse return null;
 

@@ -3,6 +3,7 @@
 const std = @import("std");
 
 const pattern = @import("pattern.zig");
+const AddressSource = @import("originals.zig").AddressSource;
 
 pub const Outcome = enum(u8) {
     found,
@@ -16,8 +17,10 @@ pub const Record = struct {
     pattern: []const u8,
     start: usize,
     len: usize,
-    /// Scanned the pre-hook copy.
-    original: bool = false,
+    /// Which copy was scanned.
+    source: AddressSource = .live,
+    /// Took the first of several matches.
+    first_match: bool = false,
     outcome: Outcome,
     address: usize = 0,
     ns: u64,
