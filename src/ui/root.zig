@@ -1104,6 +1104,11 @@ pub fn setWindowFocus() void {
     raw("ImGui_SetWindowFocus")();
 }
 
+/// No window has focus after this, so keys go back to the game.
+pub fn clearWindowFocus() void {
+    raw("ImGui_SetWindowFocusStr")(null);
+}
+
 /// Also brings it to the front.
 pub fn setNextWindowFocus() void {
     raw("ImGui_SetNextWindowFocus")();
