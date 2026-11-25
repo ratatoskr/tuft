@@ -138,6 +138,9 @@ fn fromQueue(self: *Subclass, m: *win.MSG) void {
     if (@atomicLoad(usize, slot(self.stub, .handler), .seq_cst) == 0) return;
     const message: Message = .{ .window = self.window, .msg = m.message, .wparam = m.wParam, .lparam = m.lParam };
     if (self.handler.func(self.handler.ctx, &message) != null) {
+        // The game's loop won't translate it now, so the characters it types are made here, and
+        // come back through the queue for the handler
+        if (m.message == win.WM_KEYDOWN or m.message == win.WM_SYSKEYDOWN) _ = win.TranslateMessage(m);
         m.message = win.WM_NULL;
         self.queued.set = false;
         return;
@@ -277,10 +280,10 @@ const tests = struct {
         }
     };
 
-    /// Takes the next key for `hwnd` off the queue, like a game's loop.
-    fn take(hwnd: Handle) win.MSG {
+    /// Takes the next `msg` for `hwnd` off the queue, like a game's loop.
+    fn take(hwnd: Handle, msg: u32) win.MSG {
         var m: win.MSG = .{};
-        _ = win.PeekMessageW(&m, hwnd, win.WM_KEYDOWN, win.WM_UNICHAR, win.PM_REMOVE);
+        _ = win.PeekMessageW(&m, hwnd, msg, msg, win.PM_REMOVE);
         return m;
     }
 
@@ -294,23 +297,50 @@ const tests = struct {
 
         // Taken but not dispatched still counts
         _ = win.PostMessageW(hwnd, win.WM_KEYDOWN, 'W', 1);
-        try testing.expectEqual(win.WM_KEYDOWN, take(hwnd).message);
+        try testing.expectEqual(win.WM_KEYDOWN, take(hwnd, win.WM_KEYDOWN).message);
         try testing.expectEqual(1, keys.downs);
 
         // Eaten, so the game's loop gets nothing
         _ = win.PostMessageW(hwnd, win.WM_KEYDOWN, 'Q', 1);
-        try testing.expectEqual(win.WM_NULL, take(hwnd).message);
+        try testing.expectEqual(win.WM_NULL, take(hwnd, win.WM_KEYDOWN).message);
         try testing.expectEqual(2, keys.downs);
 
         // Dispatched after, it's not handed over twice
         _ = win.PostMessageW(hwnd, win.WM_KEYDOWN, 'E', 1);
-        const m = take(hwnd);
+        const m = take(hwnd, win.WM_KEYDOWN);
         _ = win.DispatchMessageW(&m);
         try testing.expectEqual(3, keys.downs);
 
         // Sent straight to the window, it never was on the queue
         _ = api_window.send(hwnd, win.WM_KEYDOWN, 'E', 1);
         try testing.expectEqual(4, keys.downs);
+    }
+
+    const Typing = struct {
+        chars: u32 = 0,
+
+        /// Eats every key, like the overlay while you type in it.
+        fn see(ctx: *anyopaque, m: *const Message) ?isize {
+            const self: *Typing = @ptrCast(@alignCast(ctx));
+            if (m.msg == win.WM_CHAR) self.chars += 1;
+            return 0;
+        }
+    };
+
+    test "an eaten key still types its character" {
+        const hwnd = try api_window.createHidden();
+        defer api_window.destroy(hwnd);
+        var typing: Typing = .{};
+        const subclass = try install(testing.allocator, hwnd, .{ .ctx = &typing, .func = Typing.see });
+        defer _ = subclass.uninstall();
+        if (subclass.hook == null) return error.SkipZigTest;
+
+        // A, with its scan code, so translating it makes an 'a'
+        _ = win.PostMessageW(hwnd, win.WM_KEYDOWN, 'A', 1 | (0x1E << 16));
+        try testing.expectEqual(win.WM_NULL, take(hwnd, win.WM_KEYDOWN).message);
+        // The character's on the queue now, and the hook hands it over as it's taken
+        _ = take(hwnd, win.WM_CHAR);
+        try testing.expectEqual(1, typing.chars);
     }
 
     var overlay_prev: isize = 0;
