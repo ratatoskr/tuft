@@ -4,3 +4,6 @@
 # Windows specific
 *.bat eol=crlf
 *.cmd eol=crlf
+
+# Built and kept as they are
+*.dll binary

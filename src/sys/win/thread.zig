@@ -24,8 +24,14 @@ pub fn spawn(comptime Ctx: type, comptime func: fn (Ctx) void, ctx: Ctx) !*anyop
             return 0;
         }
     };
-    return win.CreateThread(null, 0, Start.run, @ptrCast(ctx), 0, null) orelse error.SystemResources;
+    return win.CreateThread(null, stack_reserve, Start.run, @ptrCast(ctx), STACK_SIZE_PARAM_IS_A_RESERVATION, null) orelse error.SystemResources;
 }
+
+/// Each thread's stack. Without one it's whatever the game's exe asks for, which can be too little
+/// for `std.Io`'s file calls, whose Windows paths take a lot. Only reserved, so it costs nothing till
+/// it's used.
+const stack_reserve = 4 << 20;
+const STACK_SIZE_PARAM_IS_A_RESERVATION = 0x10000;
 
 /// Waits for it to finish and lets go of it.
 pub fn join(thread: *anyopaque) void {

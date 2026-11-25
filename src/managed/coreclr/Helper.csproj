@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The C# tuft loads into a game's CoreCLR to read it. zig build coreclr builds it with the C#
+       salamander makes from reflect.sal, into bin, where tuft carries it from. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Tuft.CoreClr</AssemblyName>
+    <RootNamespace>Tuft.CoreClr</RootNamespace>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+    <DebugType>none</DebugType>
+    <!-- The same bytes every build, so zig build coreclr-check can compare. No commit in the version. -->
+    <Deterministic>true</Deterministic>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <EnableSourceLink>false</EnableSourceLink>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+  </PropertyGroup>
+  <!-- Salamander.cs, the core traits and reflect.sal's. Its path is from where the build started. -->
+  <ItemGroup Condition="'$(SalamanderDir)' != ''">
+    <Compile Include="$([MSBuild]::NormalizeDirectory($(MSBuildStartupDirectory), $(SalamanderDir)))*.cs" />
+  </ItemGroup>
+</Project>

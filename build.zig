@@ -1,6 +1,54 @@
 const std = @import("std");
+const salamander_build = @import("salamander");
 
 const Import = std.Build.Module.Import;
+
+/// Where the built helper `tuft_managed` loads into a game's CoreCLR is kept, one per pointer size.
+/// Built from `src/managed/coreclr` and the C# salamander makes from `reflect.sal`, by `zig build
+/// coreclr`, so nothing else building tuft needs the dotnet SDK.
+const helper_dir = "src/managed/coreclr/bin";
+
+/// `zig build coreclr` writes the helpers into `helper_dir`, and `coreclr-check` fails if they're
+/// not what it would write. Both need the dotnet SDK, found only when they run.
+fn coreclrSteps(b: *std.Build, salamander: *std.Build.Dependency) void {
+    const dotnet = b.findProgramLazy(.{ .names = &.{"dotnet"} });
+    const update = b.addUpdateSourceFiles();
+    b.step("coreclr", "Build the C# helper for reading games' CoreCLR into " ++ helper_dir ++ ", with the dotnet SDK").dependOn(&update.step);
+    const check = b.step("coreclr-check", "Fail if the C# helper in " ++ helper_dir ++ " isn't what zig build coreclr would make");
+    const same = b.addExecutable(.{
+        .name = "same-file",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/managed/coreclr/same.zig"), .target = b.graph.host, .optimize = .ReleaseSafe }),
+    });
+    // One at a time, since two builds of one project at once can trip over each other
+    var previous: ?*std.Build.Step = null;
+    inline for (.{ .{ .x86_64, "64" }, .{ .x86, "32" } }) |bits| {
+        // Only the pointer size changes the C#, so any target with it will do
+        const target = b.resolveTargetQuery(.{ .cpu_arch = bits[0], .os_tag = .windows });
+        const cs = salamander_build.csFiles(salamander, .{ .source = b.path("src/managed/coreclr/reflect.sal"), .target = target, .name = "Reflect.cs", .namespace = "Tuft.CoreClr" });
+        const run = std.Build.Step.Run.create(b, "dotnet build Tuft.CoreClr (" ++ bits[1] ++ "-bit)");
+        run.addFileArg(dotnet);
+        run.addArg("build");
+        run.addFileArg(b.path("src/managed/coreclr/Helper.csproj"));
+        run.addArgs(&.{ "--nologo", "--disable-build-servers", "-clp:ErrorsOnly;NoSummary", "-c", "Release", "-o" });
+        const out = run.addOutputDirectoryArg("helper");
+        if (previous) |p| run.step.dependOn(p);
+        previous = &run.step;
+        // Keeps obj out of the source tree
+        run.addArg("--artifacts-path");
+        _ = run.addOutputDirectoryArg("artifacts");
+        run.addPrefixedDirectoryArg("-p:SalamanderDir=", cs);
+        run.addFileInput(b.path("src/managed/coreclr/Reflection.cs"));
+        run.setEnvironmentVariable("DOTNET_CLI_TELEMETRY_OPTOUT", "1");
+        run.setEnvironmentVariable("DOTNET_NOLOGO", "1");
+        const dll = out.path(b, "Tuft.CoreClr.dll");
+        const kept = helper_dir ++ "/Tuft.CoreClr." ++ bits[1] ++ ".dll";
+        update.addCopyFileToSource(dll, kept);
+        const compare = b.addRunArtifact(same);
+        compare.addFileArg(dll);
+        compare.addFileArg(b.path(kept));
+        check.dependOn(&compare.step);
+    }
+}
 
 /// Links the `.def` for a proxy DLL into `lib` so exports keep Windows' ordinals.
 pub fn addProxyDef(tuft: *std.Build.Dependency, lib: *std.Build.Step.Compile, dll: []const u8) void {
@@ -53,9 +101,12 @@ pub fn build(b: *std.Build) void {
         .{ .name = "tuft_mem", .module = mem },
         .{ .name = "salamander_schema", .module = salamander.module("salamander_schema") },
     });
-    // Mono and IL2CPP, through the game's own runtime
+    // Mono and IL2CPP through the game's own runtime, and CoreCLR through a C# helper carried inside
+    coreclrSteps(b, salamander);
     const managed = ctx.addModule("managed", &.{
         .{ .name = "tuft_sys", .module = sys },
+        .{ .name = "salamander_clr", .module = salamander.module("salamander_clr") },
+        .{ .name = "reflect_schema", .module = salamander_build.zigModule(salamander, .{ .source = b.path("src/managed/coreclr/reflect.sal"), .target = target }) },
     });
     // Off unless pointed at an installed Unity game, since they start its runtime in the test
     const ManagedKind = enum { mono, il2cpp };
@@ -75,6 +126,13 @@ pub fn build(b: *std.Build) void {
         game_tests.addOptions("build_options", game_options);
         ctx.addTests("managed_" ++ @tagName(kind), game_tests);
     }
+    // Starts a CoreCLR in the test, and reads it with the helper
+    ctx.addTests("managed_coreclr", b.createModule(.{
+        .root_source_file = b.path("tests/managed_coreclr.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "tuft_managed", .module = managed }},
+    }));
     // Needs exec pages from `mem`
     ctx.addTests("arch_exec", b.createModule(.{
         .root_source_file = b.path("tests/arch.zig"),

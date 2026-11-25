@@ -1,0 +1,52 @@
+// What tuft asks the C# helper it loads into a game's CoreCLR, which has no reflection API for
+// native code of its own. Types, fields and methods are the runtime's own handles, the values of
+// RuntimeTypeHandle, RuntimeFieldHandle and RuntimeMethodHandle, which stay put. Assemblies are
+// weak GC handles, so unloading one isn't held up. 0 is none.
+trait Reflector {
+    []usize assemblies();
+    // Like Assembly-CSharp.dll
+    string assemblyName(usize assembly);
+    []usize types(usize assembly);
+    usize findType(usize assembly, string ns, string name);
+
+    string typeName(usize type);
+    // Empty for nested types, like Mono
+    string typeNamespace(usize type);
+    // Like System.Collections.Generic.List<System.Int32>
+    string typeFullName(usize type);
+    usize typeParent(usize type);
+    // The type it's nested in
+    usize typeOuter(usize type);
+    usize typeAssembly(usize type);
+    // From the object's start, its MethodTable pointer, so value types count that too
+    i32 instanceSize(usize type);
+    bool isValueType(usize type);
+    bool isEnum(usize type);
+    usize enumBase(usize type);
+    // ECMA-335's ElementType
+    u8 elementType(usize type);
+
+    // Its own, not its parents'. Not consts, which the runtime keeps no handle for.
+    []usize fields(usize type);
+    string fieldName(usize field);
+    usize fieldType(usize field);
+    usize fieldOwner(usize field);
+    // ECMA-335's FieldAttributes
+    u32 fieldFlags(usize field);
+    // From the object's start, like instanceSize. -1 for statics.
+    isize fieldOffset(usize field);
+    // Runs its type's static constructor first. 0 if there's no one address, like a thread static.
+    usize staticAddress(usize field);
+
+    // Its own and its constructors, not its parents'
+    []usize methods(usize type);
+    string methodName(usize method);
+    []usize paramTypes(usize method);
+    usize returnType(usize method);
+    usize methodOwner(usize method);
+    // ECMA-335's MethodAttributes and MethodImplAttributes
+    u32 methodFlags(usize method);
+    u32 methodImplFlags(usize method);
+    // Where calls to it go, compiled first. 0 for abstract methods and open generics.
+    usize methodPointer(usize method);
+}

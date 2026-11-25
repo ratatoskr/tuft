@@ -1,6 +1,6 @@
-//! Mono and IL2CPP, the runtimes Unity and some other games run C# on. Calls the game's own runtime
-//! through its exports to list assemblies, classes, fields and methods, get method addresses, and
-//! read strings. Same calls for both.
+//! Mono and IL2CPP, the runtimes Unity and some other games run C# on, and CoreCLR, .NET's own. Calls
+//! the game's own runtime to list assemblies, classes, fields and methods, get method addresses, and
+//! read strings. Same calls for all of them, though CoreCLR only reads so far, see `coreclr.zig`.
 //!
 //! Any thread calling in has to `attach` first, or the runtime can crash. The game must have started
 //! its runtime too, so check `started` before anything else.
@@ -11,6 +11,8 @@ const h = @import("handles.zig");
 pub const exports = @import("exports.zig");
 pub const Il2Cpp = @import("il2cpp.zig").Il2Cpp;
 pub const Mono = @import("mono.zig").Mono;
+pub const coreclr = @import("coreclr.zig");
+pub const CoreClr = coreclr.CoreClr;
 /// For reading a game's C# outside the game, like in tests and tools.
 pub const standalone = @import("standalone.zig");
 
@@ -27,22 +29,25 @@ pub const String = h.String;
 pub const Thread = h.Thread;
 pub const ElementType = h.ElementType;
 
-pub const Kind = enum { il2cpp, mono };
+pub const Kind = enum { il2cpp, mono, coreclr };
 
-/// Arrays in both start with the object header, then where their bounds are and their length,
-/// each a pointer wide.
+/// Arrays under Mono and IL2CPP start with the object header, then where their bounds are and their
+/// length, each a pointer wide. CoreCLR's are shorter, see `Runtime.arrayItems`.
 pub const array_items_offset = 4 * @sizeOf(usize);
 
 /// What each runtime's DLL is usually called.
 pub const il2cpp_modules = [_][]const u8{"GameAssembly.dll"};
 pub const mono_modules = [_][]const u8{ "mono-2.0-bdwgc.dll", "mono-2.0-sgen.dll", "mono-2.0-boehm.dll", "mono.dll" };
+/// CoreCLR's, which `CoreClr.open` joins rather than reading exports.
+pub const coreclr_modules = coreclr.modules;
 
 pub const Runtime = union(Kind) {
     il2cpp: Il2Cpp,
     mono: Mono,
+    coreclr: CoreClr,
 
     /// The runtime loaded in this process, IL2CPP first. Null if neither is loaded. `missing` gets
-    /// the export it couldn't find, if one wasn't there.
+    /// the export it couldn't find, if one wasn't there. Not CoreCLR, which `CoreClr.open` joins.
     pub fn find(missing: ?*[]const u8) error{MissingExport}!?Runtime {
         for (il2cpp_modules) |name| if (sys.module.findBase(name)) |base| return try fromModule(.il2cpp, base, missing);
         for (mono_modules) |name| if (sys.module.findBase(name)) |base| return try fromModule(.mono, base, missing);
@@ -57,6 +62,11 @@ pub const Runtime = union(Kind) {
         return switch (kind) {
             .il2cpp => .{ .il2cpp = try .init(r, missing) },
             .mono => .{ .mono = try .init(r, missing) },
+            // Joined, not read from exports
+            .coreclr => {
+                if (missing) |m| m.* = "CoreCLR, which CoreClr.open joins";
+                return error.MissingExport;
+            },
         };
     }
 
@@ -307,6 +317,7 @@ pub const Runtime = union(Kind) {
     /// Where a static field is now. May run its class's static constructor.
     pub fn staticAddress(self: *const Runtime, f: *Field) StaticError!usize {
         if (!self.isStatic(f) or self.isLiteral(f)) return error.NotStatic;
+        if (self.* == .coreclr) return self.coreclr.staticAddress(f) orelse error.ThreadStatic;
         const offset = self.fieldOffset(f);
         // Both mark thread statics with an offset of -1, Mono's only 32 bits wide
         if (offset == std.math.maxInt(usize) or (self.* == .mono and offset == std.math.maxInt(u32))) return error.ThreadStatic;
@@ -466,6 +477,7 @@ pub const Runtime = union(Kind) {
             if (!std.mem.eql(u8, self.methodName(m), method)) continue;
             if (self.methodImplFlags(m) & h.method_internal_call == 0) continue;
             switch (self.*) {
+                .coreclr => return null,
                 .mono => |*r| return r.icallOf(m),
                 .il2cpp => |*r| {
                     // Some are registered with their signature, like `Class::name(System.Int32,UnityEngine.Vector3&)`
@@ -523,8 +535,8 @@ pub const Runtime = union(Kind) {
     }
 
     /// Where an array's items start. They're objects, or values for value types.
-    pub fn arrayItems(_: *const Runtime, array: *Object) usize {
-        return @intFromPtr(array) + array_items_offset;
+    pub fn arrayItems(self: *const Runtime, array: *Object) usize {
+        return @intFromPtr(array) + if (self.* == .coreclr) CoreClr.array_items_offset else array_items_offset;
     }
 
     /// Whether this thread can call in without `attach`, like the game's own threads.

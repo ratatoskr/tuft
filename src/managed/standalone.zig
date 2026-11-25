@@ -23,6 +23,8 @@ pub fn start(a: std.mem.Allocator, io: std.Io, kind: managed.Kind, game: []const
     return switch (kind) {
         .mono => startMono(a, io, game, data, missing),
         .il2cpp => startIl2Cpp(a, data, game, missing),
+        // .NET games start their own, and tests start one with salamander_clr
+        .coreclr => error.LoadFailed,
     };
 }
 
