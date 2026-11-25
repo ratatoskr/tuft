@@ -211,9 +211,6 @@ const Headers = struct {
 };
 
 test "laid out like it's loaded" {
-    const saved = std.testing.log_level;
-    std.testing.log_level = .err;
-    defer std.testing.log_level = saved;
     const root = @import("root.zig");
     const io = std.testing.io;
     const gpa = std.testing.allocator;

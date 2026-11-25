@@ -439,10 +439,6 @@ const tests = struct {
     }
 
     test "modules, exports and sigs" {
-        // The sig that's meant to miss logs a warning, and output fails the run
-        const saved = testing.log_level;
-        testing.log_level = .err;
-        defer testing.log_level = saved;
         const env: Env = .{ .symbols = .local, .memory = .local };
         const kernel32 = Symbols.local.resolve("kernel32.dll").?;
         try expectEval(kernel32 + 0x10, "KERNEL32.DLL + 0x10", env);

@@ -96,10 +96,6 @@ fn provide(start: usize, len: usize) ?[*]const u8 {
 }
 
 test "original scans read the copy" {
-    const saved = std.testing.log_level;
-    std.testing.log_level = .err;
-    defer std.testing.log_level = saved;
-
     const Range = @import("Range.zig").Generic(@import("Address.zig").NoHooks);
     const text_section = try root.Module.main().text();
 

@@ -80,7 +80,7 @@ pub fn findIn(self: Sig, name: []const u8, source: AddressSource) Address {
     const r = (if (source != .live and self.section.len == 0) self.codeRange() else self.range()) catch |err| return failed(name, err);
     var buf: [max_len]?u8 = undefined;
     const p = root.pattern.parseInto(self.pattern, &buf) catch |err| return failed(name, err);
-    // The scan logs its own failures
+    // Misses are only debug, since another copy may have it and callers say what failed
     const copy = r.from(source);
     return if (self.first_match) copy.scanPatternFirst(name, p) else copy.scanPattern(name, p);
 }
@@ -115,7 +115,7 @@ pub fn fromIn(self: Sig, name: []const u8, match: usize, source: AddressSource) 
 }
 
 fn failed(name: []const u8, err: anyerror) Address {
-    log.warn("{s}: {t}", .{ name, err });
+    log.debug("{s}: {t}", .{ name, err });
     return .fail(err);
 }
 
@@ -144,9 +144,6 @@ test "as location text" {
 }
 
 test "falls through the copies" {
-    const saved = std.testing.log_level;
-    std.testing.log_level = .err;
-    defer std.testing.log_level = saved;
     const text = try Module.main().text();
     // A pattern from live code, put in a fake disk copy somewhere else in .text
     const Copies = struct {

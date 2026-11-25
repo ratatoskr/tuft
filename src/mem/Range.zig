@@ -101,7 +101,7 @@ pub fn Generic(comptime Hooks: type) type {
             var outcome: scans.Outcome = .not_found;
             var found: usize = 0;
             self.search(p, unique, &outcome, &found) catch |err| {
-                log.warn("{s}: {t}", .{ name, err });
+                log.debug("{s}: {t}", .{ name, err });
                 return self.result(err);
             };
             var text: [768]u8 = undefined;
@@ -122,11 +122,11 @@ pub fn Generic(comptime Hooks: type) type {
                     break :blk self.result(found);
                 },
                 .not_found => blk: {
-                    log.warn("{s}: signature not found", .{name});
+                    log.debug("{s}: signature not found", .{name});
                     break :blk self.result(error.PatternNotFound);
                 },
                 .not_unique => blk: {
-                    log.warn("{s}: signature matches more than once", .{name});
+                    log.debug("{s}: signature matches more than once", .{name});
                     break :blk self.result(error.PatternNotUnique);
                 },
             };
@@ -194,9 +194,6 @@ pub fn Generic(comptime Hooks: type) type {
 }
 
 test "chunked scans" {
-    const saved = std.testing.log_level;
-    std.testing.log_level = .err;
-    defer std.testing.log_level = saved;
     const Remote = struct {
         // Not our memory, only readable through `read`
         const base: usize = 0x5000_0000;
@@ -232,9 +229,6 @@ test "chunked scans" {
 }
 
 test "scan matching" {
-    const saved = std.testing.log_level;
-    std.testing.log_level = .err;
-    defer std.testing.log_level = saved;
     const mem = [_]u8{ 0xD3, 0xEF, 0x44, 0x98, 0x99, 0x11, 0xFF, 0x0D, 0xC0, 0xEE, 0x36, 0xEE, 0x99, 0x22, 0xFF, 0x21 };
     const Range = Generic(address.NoHooks);
     const range = Range.fromSlice(&mem);
@@ -255,9 +249,6 @@ test "scan matching" {
 }
 
 test "original scans" {
-    const saved = std.testing.log_level;
-    std.testing.log_level = .err;
-    defer std.testing.log_level = saved;
     const Copies = struct {
         // Live bytes got "hooked" after the copy was taken
         var live = [_]u8{ 0xE9, 0x00, 0x00, 0x00, 0x00, 0xC3 };
@@ -284,9 +275,6 @@ test "original scans" {
 }
 
 test "scans are reported" {
-    const saved = std.testing.log_level;
-    std.testing.log_level = .err;
-    defer std.testing.log_level = saved;
     const Seen = struct {
         var last: scans.Outcome = .found;
         var found: usize = 0;
