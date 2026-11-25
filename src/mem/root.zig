@@ -28,6 +28,8 @@ pub const Search = @import("Search.zig");
 pub const isReadable = sys_memory.isReadable;
 /// Ignores protection and flushes the instruction cache.
 pub const writeCode = sys_memory.writeCode;
+pub const Unlocked = sys_memory.Unlocked;
+pub const unlockCode = sys_memory.unlockCode;
 /// Works on read-only data like vtables. Returns whether it swapped.
 pub const swapPointer = sys_memory.swapPointer;
 pub const Protection = sys_memory.Protection;

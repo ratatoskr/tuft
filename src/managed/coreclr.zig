@@ -497,4 +497,26 @@ pub const CoreClr = struct {
     pub fn enumBase(self: *const CoreClr, c: *Class) ?*Type {
         return of(Type, self.reflector.enumBase(id(c)));
     }
+
+    /// An assembly in a load context of its own, like a plugin's, which `unloadIsolated` lets go.
+    pub const Isolated = enum(usize) { _ };
+
+    /// Loads the assembly at `path` into a context of its own. What's wrong goes in `why`, from `a`.
+    pub fn loadIsolated(self: *const CoreClr, a: std.mem.Allocator, path: []const u8, why: *[]const u8) ?Isolated {
+        const handle = self.reflector.loadIsolated(path);
+        if (handle != 0) return @fromBackingInt(@intCast(handle));
+        why.* = a.dupe(u8, self.reflector.loadError()) catch "";
+        return null;
+    }
+
+    /// A static `[UnmanagedCallersOnly]` method of `type_name` in it, to call. Null if there's none.
+    pub fn isolatedFunction(self: *const CoreClr, isolated: Isolated, type_name: []const u8, method: []const u8) ?usize {
+        const at = self.reflector.isolatedFunction(@backingInt(isolated), type_name, method);
+        return if (at == 0) null else at;
+    }
+
+    /// What it loaded goes once nothing uses it, and `changes` goes up then.
+    pub fn unloadIsolated(self: *const CoreClr, isolated: Isolated) void {
+        self.reflector.unloadIsolated(@backingInt(isolated));
+    }
 };

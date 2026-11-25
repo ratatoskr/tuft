@@ -187,10 +187,13 @@ pub fn replaceSize(address: usize, options: ReplaceOptions) !usize {
 pub fn enable(self: *Patch) !void {
     if (self.enabled) return;
     {
+        // Before freezing, since some games hook page protection with a lock of their own
+        const unlocked = try memory.unlockCode(self.address, self.bytes.len);
+        defer unlocked.lock();
         var guard = try self.freezeThreads();
         defer guard.deinit();
         if (!std.mem.eql(u8, self.current(), self.original)) return error.TargetModified;
-        try memory.writeCode(self.address, self.bytes);
+        unlocked.write(self.address, self.bytes);
         self.enabled = true;
     }
 }
@@ -199,13 +202,15 @@ pub fn enable(self: *Patch) !void {
 pub fn disable(self: *Patch) !void {
     if (!self.enabled) return;
     {
+        const unlocked = try memory.unlockCode(self.address, self.original.len);
+        defer unlocked.lock();
         var guard = try self.freezeThreads();
         defer guard.deinit();
         if (!std.mem.eql(u8, self.current(), self.bytes)) {
             self.enabled = false;
             return error.TargetModified;
         }
-        try memory.writeCode(self.address, self.original);
+        unlocked.write(self.address, self.original);
         self.enabled = false;
     }
 }

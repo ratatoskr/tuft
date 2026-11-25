@@ -18,6 +18,10 @@ pub const free = native.free;
 pub const protect = native.protect;
 /// Ignores page protection and flushes the icache.
 pub const writeCode = native.writeCode;
+/// Code made writable, to write while threads are frozen. Protection's changed before freezing
+/// and put back after, since some games hook it with a lock a frozen thread can hold.
+pub const Unlocked = native.Unlocked;
+pub const unlockCode = native.unlockCode;
 /// Swaps even read-only pointers. True if swapped.
 pub const swapPointer = native.swapPointer;
 pub const isReadable = native.isReadable;

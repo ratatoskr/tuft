@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
@@ -461,4 +462,87 @@ sealed unsafe class Reflection : IReflector
     public nuint TypeObject(nuint type) => Keep(TypeOf(type));
 
     public nuint NewArray(nuint element, nuint length) => TypeOf(element) is { } t ? Keep(Array.CreateInstance(t, checked((int)length))) : 0;
+
+    // Isolated assemblies
+
+    sealed class Isolated : AssemblyLoadContext
+    {
+        readonly AssemblyDependencyResolver? deps;
+        public Assembly? Main;
+
+        public Isolated(string path) : base(Path.GetFileNameWithoutExtension(path), isCollectible: true)
+        {
+            // Without a .deps.json it finds nothing, and what's shared comes from the default context
+            try
+            {
+                deps = new AssemblyDependencyResolver(path);
+            }
+            catch (InvalidOperationException) { }
+        }
+
+        public Assembly LoadRead(string path)
+        {
+            using var dll = File.OpenRead(path);
+            var pdb = Path.ChangeExtension(path, ".pdb");
+            if (!File.Exists(pdb)) return LoadFromStream(dll);
+            using var symbols = File.OpenRead(pdb);
+            return LoadFromStream(dll, symbols);
+        }
+
+        protected override Assembly? Load(AssemblyName name) =>
+            deps?.ResolveAssemblyToPath(name) is { } p ? LoadRead(p) : null;
+
+        protected override nint LoadUnmanagedDll(string name) =>
+            deps?.ResolveUnmanagedDllToPath(name) is { } p ? LoadUnmanagedDllFromPath(p) : 0;
+    }
+
+    static readonly Dictionary<nuint, Isolated> isolated = new();
+    static nuint lastIsolated;
+    static string loadError = "";
+
+    public string LoadError()
+    {
+        lock (gate) return loadError;
+    }
+
+    public nuint LoadIsolated(string path)
+    {
+        try
+        {
+            var context = new Isolated(path);
+            context.Main = context.LoadRead(path);
+            lock (gate)
+            {
+                isolated[++lastIsolated] = context;
+                return lastIsolated;
+            }
+        }
+        catch (Exception e)
+        {
+            lock (gate) loadError = e.Message;
+            return 0;
+        }
+    }
+
+    public nuint IsolatedFunction(nuint context, string type, string method)
+    {
+        Isolated? c;
+        lock (gate)
+        {
+            if (!isolated.TryGetValue(context, out c)) return 0;
+        }
+        var m = c.Main?.GetType(type, false)?.GetMethod(method, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        return m == null ? 0 : (nuint)m.MethodHandle.GetFunctionPointer();
+    }
+
+    public void UnloadIsolated(nuint context)
+    {
+        Isolated? c;
+        lock (gate)
+        {
+            if (!isolated.Remove(context, out c)) return;
+        }
+        c.Main = null;
+        c.Unload();
+    }
 }

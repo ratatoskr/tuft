@@ -145,21 +145,39 @@ pub fn protect(addr: usize, len: usize, protection: sys.memory.Protection) !sys.
 
 pub fn writeCode(addr: usize, bytes: []const u8) !void {
     if (bytes.len == 0) return;
+    const unlocked = try unlockCode(addr, bytes.len);
+    defer unlocked.lock();
+    unlocked.write(addr, bytes);
+}
 
-    const target_ptr: [*]u8 = @ptrFromInt(addr);
-    var old_protect: zwin.PAGE = .{};
+/// `len` bytes from `addr`, writable till `lock`.
+pub const Unlocked = struct {
+    addr: usize,
+    len: usize,
+    old: zwin.PAGE,
 
-    if (win.VirtualProtect(target_ptr, bytes.len, zwin.PAGE{ .EXECUTE_READWRITE = true }, &old_protect) == zwin.BOOL.FALSE)
-        return zwin.unexpectedError(zwin.GetLastError());
-
-    defer {
-        var dummy: zwin.PAGE = .{};
-        _ = win.VirtualProtect(target_ptr, bytes.len, old_protect, &dummy);
+    /// Inside what was unlocked. No system calls bar the icache flush, so it's fine with every
+    /// other thread frozen.
+    pub fn write(self: Unlocked, at: usize, bytes: []const u8) void {
+        std.debug.assert(at >= self.addr and at + bytes.len <= self.addr + self.len);
+        const target: [*]u8 = @ptrFromInt(at);
+        @memcpy(target[0..bytes.len], bytes);
+        _ = win.FlushInstructionCache(zwin.GetCurrentProcess(), target, bytes.len);
     }
 
-    @memcpy(target_ptr[0..bytes.len], bytes);
+    /// Puts the protection back.
+    pub fn lock(self: Unlocked) void {
+        var dummy: zwin.PAGE = .{};
+        _ = win.VirtualProtect(@ptrFromInt(self.addr), self.len, self.old, &dummy);
+    }
+};
 
-    _ = win.FlushInstructionCache(zwin.GetCurrentProcess(), target_ptr, bytes.len);
+/// `error.ProtectFailed` if it can't be made writable, like when a game's anti-tamper refuses.
+pub fn unlockCode(addr: usize, len: usize) !Unlocked {
+    var old: zwin.PAGE = .{};
+    if (win.VirtualProtect(@ptrFromInt(addr), len, zwin.PAGE{ .EXECUTE_READWRITE = true }, &old) == zwin.BOOL.FALSE)
+        return error.ProtectFailed;
+    return .{ .addr = addr, .len = len, .old = old };
 }
 
 pub fn swapPointer(addr: usize, expected: usize, new: usize) !bool {

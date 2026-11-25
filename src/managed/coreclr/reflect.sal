@@ -76,4 +76,16 @@ trait Reflector {
     // The System.Type
     usize typeObject(usize type);
     usize newArray(usize element, usize length);
+
+    // Assemblies of their own, like a plugin's, each in a load context that can unload. What one depends
+    // on is found next to it, and what the default context has, like the runtime's, is shared.
+
+    // Loads the assembly at path, read so the file isn't held. 0 if it couldn't, and loadError says why.
+    usize loadIsolated(string path);
+    // Why loadIsolated last couldn't
+    string loadError();
+    // A static [UnmanagedCallersOnly] method of a type in it, by the type's full name, as a pointer to call. 0 if there's none.
+    usize isolatedFunction(usize context, string type, string method);
+    // Lets it go. What it loaded goes once nothing uses it, and changes goes up then.
+    void unloadIsolated(usize context);
 }

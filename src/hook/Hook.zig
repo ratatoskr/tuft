@@ -322,15 +322,18 @@ pub fn enable(self: *Hook) !void {
         log.debug("Enabled slot hook for 0x{x}", .{self.target_addr});
         return;
     }
-    // Nothing that could take a lock while threads are frozen, like logging or allocating
+    // Nothing that could take a lock while threads are frozen, like logging or allocating. Page
+    // protection too, which some games hook with a lock of their own
     {
+        const unlocked = try memory.unlockCode(self.target_addr, self.patch_len);
+        defer unlocked.lock();
         var guard = try self.freezeThreads();
         defer guard.deinit();
 
         if (!std.mem.eql(u8, self.targetBytes(self.stolen_len), self.original_bytes[0..self.stolen_len])) {
             return error.TargetModified;
         }
-        try memory.writeCode(self.target_addr, self.patch_bytes[0..self.patch_len]);
+        unlocked.write(self.target_addr, self.patch_bytes[0..self.patch_len]);
         self.state = .enabled;
     }
     log.debug("Enabled hook for target 0x{x}", .{self.target_addr});
@@ -344,17 +347,21 @@ pub fn disable(self: *Hook) !void {
         log.debug("Disabled slot hook for 0x{x}", .{self.target_addr});
         return;
     }
-    // Same as `enable`, no logging while threads are frozen
+    // Same as `enable`, no logging or page protection while threads are frozen
     {
+        const target: ?memory.Unlocked = if (self.mode != .slot) try memory.unlockCode(self.target_addr, @max(self.patch_len, self.stolen_len)) else null;
+        defer if (target) |t| t.lock();
+        const detour = try memory.unlockCode(self.detour_addr, arch.abs_jmp_len);
+        defer detour.lock();
         var guard = try self.freezeThreads();
         defer guard.deinit();
 
         if (self.mode != .slot and std.mem.eql(u8, self.targetBytes(self.patch_len), self.patch_bytes[0..self.patch_len])) {
-            try memory.writeCode(self.target_addr, self.original_bytes[0..self.stolen_len]);
+            target.?.write(self.target_addr, self.original_bytes[0..self.stolen_len]);
             self.state = .disabled;
         } else {
             // Whoever replaced our patch or pointer might have kept ours as their original
-            try memory.writeCode(self.detour_addr, arch.encodeJmp(self.detour_addr, self.trampoline_addr).slice());
+            detour.write(self.detour_addr, arch.encodeJmp(self.detour_addr, self.trampoline_addr).slice());
             self.state = .orphaned;
         }
     }
