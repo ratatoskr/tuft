@@ -29,7 +29,7 @@ fn coreclrSteps(b: *std.Build, salamander: *std.Build.Dependency) void {
         run.addFileArg(dotnet);
         run.addArg("build");
         run.addFileArg(b.path("src/managed/coreclr/Helper.csproj"));
-        run.addArgs(&.{ "--nologo", "--disable-build-servers", "-clp:ErrorsOnly;NoSummary", "-c", "Release", "-o" });
+        run.addArgs(&.{ "--nologo", "--disable-build-servers", "-v", "quiet", "-clp:ErrorsOnly;NoSummary", "-c", "Release", "-o" });
         const out = run.addOutputDirectoryArg("helper");
         if (previous) |p| run.step.dependOn(p);
         previous = &run.step;
@@ -40,6 +40,8 @@ fn coreclrSteps(b: *std.Build, salamander: *std.Build.Dependency) void {
         run.addFileInput(b.path("src/managed/coreclr/Reflection.cs"));
         run.setEnvironmentVariable("DOTNET_CLI_TELEMETRY_OPTOUT", "1");
         run.setEnvironmentVariable("DOTNET_NOLOGO", "1");
+        // dotnet writes its errors to stdout
+        run.stdio = .inherit;
         const dll = out.path(b, "Tuft.CoreClr.dll");
         const kept = helper_dir ++ "/Tuft.CoreClr." ++ bits[1] ++ ".dll";
         update.addCopyFileToSource(dll, kept);

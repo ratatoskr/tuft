@@ -86,6 +86,65 @@ test "reads a CoreCLR" {
     const again = try managed.CoreClr.open(gpa, testing.io, .{ .dir = dir });
     try testing.expectEqual(string, again.findClass(@ptrCast(corlib), "System", "String").?);
 
+    // Strings, made and read, and held while the garbage collector moves things
+    const hello = rt.newString("hello") orelse return error.NoString;
+    const hello_obj: *managed.Object = @ptrCast(hello);
+    try testing.expectEqual(string, rt.objectClass(hello_obj).?);
+    const handle = rt.newHandle(hello_obj, false);
+    try testing.expect(handle != 0);
+    defer rt.freeHandle(handle);
+    var chars: i32 = 0;
+    rt.fieldValue(hello_obj, length, &chars);
+    try testing.expectEqual(5, chars);
+    const held = try rt.readString(a, @ptrCast(rt.handleTarget(handle).?));
+    defer a.free(held);
+    try testing.expectEqualStrings("hello", held);
+    const pinned = rt.newHandle(hello_obj, true);
+    try testing.expect(pinned != 0);
+    rt.freeHandle(pinned);
+
+    // Methods, with objects and values in and out, and what they throw
+    const substring = rt.findMethod(string, "Substring", 1) orelse return error.NoMethod;
+    var start: i32 = 2;
+    var thrown: ?*managed.Object = null;
+    const tail = rt.invoke(substring, rt.handleTarget(handle), &[_]?*anyopaque{&start}, &thrown) orelse return error.NoResult;
+    try testing.expectEqual(null, thrown);
+    const tail_text = try rt.readString(a, @ptrCast(tail));
+    defer a.free(tail_text);
+    try testing.expectEqualStrings("llo", tail_text);
+    start = 100;
+    try testing.expectEqual(null, rt.invoke(substring, rt.handleTarget(handle), &[_]?*anyopaque{&start}, &thrown));
+    try testing.expectEqualStrings("ArgumentOutOfRangeException", rt.className(rt.objectClass(thrown.?).?));
+    const boxed = rt.invoke(is_empty, null, &[_]?*anyopaque{rt.handleTarget(handle)}, null) orelse return error.NoResult;
+    try testing.expectEqual(false, @as(*const bool, @ptrCast(rt.unbox(boxed).?)).*);
+
+    // A new object from its constructor, and its fields read and written
+    const make_version = blk: {
+        var it = rt.methods(version);
+        while (it.next()) |m| if (std.mem.eql(u8, rt.methodName(m), ".ctor") and rt.paramCount(m) == 2) break :blk m;
+        break :blk null;
+    };
+    var major: i32 = 3;
+    var minor: i32 = 4;
+    const v = rt.invoke(make_version orelse return error.NoMethod, null, &[_]?*anyopaque{ &major, &minor }, null) orelse return error.NoResult;
+    var got: i32 = 0;
+    rt.fieldValue(v, rt.findField(version, "_Major").?, &got);
+    try testing.expectEqual(3, got);
+    var seven: i32 = 7;
+    rt.setFieldValue(v, rt.findField(version, "_Minor").?, &seven);
+    rt.fieldValue(v, rt.findField(version, "_Minor").?, &got);
+    try testing.expectEqual(7, got);
+
+    // Statics' values, arrays and System.Type
+    var empty_value: ?*managed.Object = null;
+    try testing.expect(rt.staticValue(empty, @ptrCast(&empty_value)));
+    try testing.expectEqual(string, rt.objectClass(empty_value.?).?);
+    const int32 = rt.findClass(corlib, "System", "Int32").?;
+    const numbers = rt.newArray(int32, 3) orelse return error.NoArray;
+    try testing.expectEqual(3, rt.arrayLength(numbers));
+    const type_object = rt.typeObject(rt.classType(string).?) orelse return error.NoType;
+    try testing.expectEqualStrings("RuntimeType", rt.className(rt.objectClass(type_object).?));
+
     // Mono and IL2CPP's way of finding a class anywhere works too
     try testing.expectEqual(string, (try rt.findClassAnywhere(a, "System.String")).?);
 }

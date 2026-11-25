@@ -1,8 +1,11 @@
 //! .NET's CoreCLR, which games and mod loaders like Dalamud run C# on. It has no reflection API
 //! for native code, so this joins the runtime the game's already running and loads a C# helper
 //! into it, then asks it. The helper's built from `coreclr/` by `zig build coreclr` and kept in
-//! `coreclr/bin`, so building tuft doesn't need the dotnet SDK. Only reads for now: objects move
-//! under CoreCLR's garbage collector, so calls that would hold one aren't there yet.
+//! `coreclr/bin`, so building tuft doesn't need the dotnet SDK.
+//!
+//! Objects move under CoreCLR's garbage collector, unlike Mono's and IL2CPP's, so an object's
+//! address is only good till it next runs. Hold one with `newHandle` and get where it is now with
+//! `handleTarget`. What the helper gives back is kept alive a little while, for that.
 //!
 //! Types are the runtime's MethodTables, so `Class` and `Type` are the same handle. Fields and
 //! methods are its FieldDescs and MethodDescs. An image is its assembly.
@@ -86,6 +89,9 @@ pub const CoreClr = struct {
         lock: sys.sync.Mutex = .{},
         names: std.AutoHashMapUnmanaged(Key, [:0]const u8) = .empty,
         lists: std.AutoHashMapUnmanaged(Key, []const usize) = .empty,
+        sizes: std.AutoHashMapUnmanaged(usize, u32) = .empty,
+        /// GCHandles, which are pointers, by the `u32` handles callers get, less one. 0 is a free slot.
+        handles: std.ArrayList(usize) = .empty,
 
         const Key = struct { what: What, handle: usize };
         const What = enum(u8) { assembly, type, namespace, full_name, field, method, types, fields, methods, params };
@@ -273,18 +279,44 @@ pub const CoreClr = struct {
         return if (at == 0) null else at;
     }
 
-    // Not yet, see the top
-    pub fn staticValue(_: *const CoreClr, _: *Field, _: *anyopaque) bool {
-        return false;
+    /// One of its values' size, for copying it.
+    fn typeSize(self: *const CoreClr, t: usize) u32 {
+        const c = self.cache;
+        c.lock.lock();
+        defer c.lock.unlock();
+        if (c.sizes.get(t)) |s| return s;
+        const s = self.reflector.typeSize(t);
+        c.sizes.put(c.a, t, s) catch {};
+        return s;
     }
 
+    fn copyField(self: *const CoreClr, f: *Field, from: usize, out: *anyopaque) void {
+        const size = self.typeSize(id(self.fieldType(f) orelse return));
+        const src: [*]const u8 = @ptrFromInt(from);
+        @memcpy(@as([*]u8, @ptrCast(out))[0..size], src[0..size]);
+    }
+
+    pub fn staticValue(self: *const CoreClr, f: *Field, out: *anyopaque) bool {
+        self.copyField(f, self.staticAddress(f) orelse return false, out);
+        return true;
+    }
+
+    /// Statics aren't in one block under CoreCLR, so `staticAddress` finds each.
     pub fn staticData(_: *const CoreClr, _: *Class) ?usize {
         return null;
     }
 
-    pub fn fieldValue(_: *const CoreClr, _: *Object, _: *Field, _: *anyopaque) void {}
+    /// Read straight from the object, which needs nothing from the garbage collector.
+    pub fn fieldValue(self: *const CoreClr, o: *Object, f: *Field, out: *anyopaque) void {
+        const offset = self.fieldOffset(f);
+        if (offset == std.math.maxInt(usize)) return;
+        self.copyField(f, @intFromPtr(o) + offset, out);
+    }
 
-    pub fn setFieldValue(_: *const CoreClr, _: *Object, _: *Field, _: ?*anyopaque) void {}
+    /// Through the runtime, since writing a reference needs the garbage collector to hear about it.
+    pub fn setFieldValue(self: *const CoreClr, o: *Object, f: *Field, value: ?*anyopaque) void {
+        self.reflector.setFieldValue(id(f), id(o), @intFromPtr(value));
+    }
 
     /// The runtime keeps it, so `free` does nothing.
     pub fn typeNameOwned(self: *const CoreClr, t: *Type) ?[*:0]u8 {
@@ -333,8 +365,7 @@ pub const CoreClr = struct {
         return if (at == 0) null else at;
     }
 
-    // Objects, read straight from memory, since their layout's been the same since .NET Core 1.
-    // Each is only good till the garbage collector next runs.
+    // Objects, read straight from memory, since their layout's been the same since .NET Core 1
 
     const word = @sizeOf(usize);
 
@@ -365,31 +396,68 @@ pub const CoreClr = struct {
 
     pub const array_items_offset = 2 * word;
 
-    // Not yet, see the top
-    pub fn newString(_: *const CoreClr, _: [*:0]const u8) ?*String {
-        return null;
+    // Through the helper
+
+    pub fn newString(self: *const CoreClr, text: [*:0]const u8) ?*String {
+        return of(String, self.reflector.newString(std.mem.span(text)));
     }
 
-    pub fn invoke(_: *const CoreClr, _: *Method, _: ?*anyopaque, _: ?[*]const ?*anyopaque, _: ?*?*Object) ?*Object {
-        return null;
+    pub fn invoke(self: *const CoreClr, m: *Method, this: ?*anyopaque, args: ?[*]const ?*anyopaque, exception: ?*?*Object) ?*Object {
+        var thrown: usize = 0;
+        const result = self.reflector.invoke(id(m), @intFromPtr(this), @intFromPtr(args), &thrown);
+        if (exception) |e| e.* = of(Object, thrown);
+        return of(Object, result);
     }
 
-    pub fn newHandle(_: *const CoreClr, _: *Object, _: bool) u32 {
-        return 0;
+    /// 0 if it couldn't, like pinning something that isn't an array or string of plain values.
+    pub fn newHandle(self: *const CoreClr, o: *Object, pinned: bool) u32 {
+        const gc = self.reflector.newHandle(id(o), pinned);
+        if (gc == 0) return 0;
+        const c = self.cache;
+        c.lock.lock();
+        defer c.lock.unlock();
+        const slot = for (c.handles.items, 0..) |h_, i| {
+            if (h_ == 0) break i;
+        } else blk: {
+            c.handles.append(c.a, 0) catch {
+                self.reflector.freeHandle(gc);
+                return 0;
+            };
+            break :blk c.handles.items.len - 1;
+        };
+        c.handles.items[slot] = gc;
+        return @intCast(slot + 1);
     }
 
-    pub fn handleTarget(_: *const CoreClr, _: u32) ?*Object {
-        return null;
+    fn gcHandle(self: *const CoreClr, handle: u32) usize {
+        const c = self.cache;
+        c.lock.lock();
+        defer c.lock.unlock();
+        return if (handle == 0 or handle > c.handles.items.len) 0 else c.handles.items[handle - 1];
     }
 
-    pub fn freeHandle(_: *const CoreClr, _: u32) void {}
-
-    pub fn typeObject(_: *const CoreClr, _: *Type) ?*Object {
-        return null;
+    /// Where it is now.
+    pub fn handleTarget(self: *const CoreClr, handle: u32) ?*Object {
+        const gc = self.gcHandle(handle);
+        return if (gc == 0) null else of(Object, self.reflector.handleTarget(gc));
     }
 
-    pub fn newArray(_: *const CoreClr, _: *Class, _: usize) ?*Object {
-        return null;
+    pub fn freeHandle(self: *const CoreClr, handle: u32) void {
+        const gc = self.gcHandle(handle);
+        if (gc == 0) return;
+        self.reflector.freeHandle(gc);
+        const c = self.cache;
+        c.lock.lock();
+        defer c.lock.unlock();
+        c.handles.items[handle - 1] = 0;
+    }
+
+    pub fn typeObject(self: *const CoreClr, t: *Type) ?*Object {
+        return of(Object, self.reflector.typeObject(id(t)));
+    }
+
+    pub fn newArray(self: *const CoreClr, element: *Class, length: usize) ?*Object {
+        return of(Object, self.reflector.newArray(id(element), length));
     }
 
     pub fn isEnum(self: *const CoreClr, c: *Class) bool {

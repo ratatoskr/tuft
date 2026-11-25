@@ -1,6 +1,6 @@
 // The C# tuft loads into a game's CoreCLR to read it, since CoreCLR has no reflection API for
-// native code. reflect.sal says what each call does. Only reads, and never keeps a type, field or
-// method alive, so a mod loader can still unload what it loaded.
+// native code. reflect.sal says what each call does. Never keeps a type, field or method alive, so
+// a mod loader can still unload what it loaded. Objects are their addresses, see Keep.
 
 using System;
 using System.Collections.Generic;
@@ -272,4 +272,115 @@ sealed unsafe class Reflection : IReflector
         RuntimeHelpers.PrepareMethod(m.MethodHandle);
         return (nuint)m.MethodHandle.GetFunctionPointer();
     }
+
+    // Objects
+
+    // What's been handed out lately, so it isn't collected before the caller holds it
+    readonly object?[] recent = new object?[64];
+    int nextRecent;
+
+    nuint Keep(object? o)
+    {
+        if (o == null) return 0;
+        lock (gate) recent[nextRecent++ % recent.Length] = o;
+        return AddressOf(o);
+    }
+
+    static nuint AddressOf(object o) => Unsafe.As<object, nuint>(ref o);
+
+    static object? ObjectAt(nuint address) => address == 0 ? null : Unsafe.As<nuint, object>(ref address);
+
+    // A boxed value's bytes start right after its MethodTable. Never made, only laid over a box.
+    sealed class Boxed
+    {
+#pragma warning disable CS0649
+        public byte Data;
+#pragma warning restore CS0649
+    }
+
+    static object Box(Type t, nuint at) =>
+        at == 0 ? RuntimeHelpers.GetUninitializedObject(t) : RuntimeHelpers.Box(ref *(byte*)at, t.TypeHandle)!;
+
+    static void Unbox(Type t, object boxed, nuint into) =>
+        Unsafe.CopyBlockUnaligned(ref *(byte*)into, ref Unsafe.As<Boxed>(boxed).Data, (uint)RuntimeHelpers.SizeOf(t.TypeHandle));
+
+    /// <summary>An argument or field value from native code: a pointer to a value, or an object.</summary>
+    static object? ValueFrom(Type t, nuint at)
+    {
+        if (t.IsByRef)
+        {
+            var inner = t.GetElementType()!;
+            return inner.IsValueType ? Box(inner, at) : ObjectAt(at == 0 ? 0 : *(nuint*)at);
+        }
+        if (t.IsPointer) return Pointer.Box(at == 0 ? null : *(void**)at, t);
+        return t.IsValueType ? Box(t, at) : ObjectAt(at);
+    }
+
+    public uint TypeSize(nuint type) => TypeOf(type) is { IsValueType: true, ContainsGenericParameters: false } t ? (uint)RuntimeHelpers.SizeOf(t.TypeHandle) : (uint)sizeof(nint);
+
+    public nuint Invoke(nuint method, nuint self, nuint args, ref nuint exception)
+    {
+        exception = 0;
+        if (MethodOf(method) is not { } m || m.DeclaringType is not { } owner) return 0;
+        var ps = m.GetParameters();
+        var argv = (nuint*)args;
+        var values = new object?[ps.Length];
+        for (var i = 0; i < ps.Length; i++) values[i] = ValueFrom(ps[i].ParameterType, argv == null ? 0 : argv[i]);
+        var target = m.IsStatic ? null : owner.IsValueType ? Box(owner, self) : ObjectAt(self);
+        object? result;
+        try
+        {
+            result = m is ConstructorInfo ctor && self == 0
+                ? ctor.Invoke(BindingFlags.DoNotWrapExceptions, null, values, null)
+                : m.Invoke(target, BindingFlags.DoNotWrapExceptions, null, values, null);
+        }
+        catch (Exception e)
+        {
+            exception = Keep(e);
+            return 0;
+        }
+        // What it changed through ref parameters and this goes back where it came from
+        for (var i = 0; i < ps.Length; i++)
+        {
+            var t = ps[i].ParameterType;
+            if (!t.IsByRef || argv == null || argv[i] == 0) continue;
+            var inner = t.GetElementType()!;
+            if (inner.IsValueType) Unbox(inner, values[i]!, argv[i]);
+            else *(nuint*)argv[i] = Keep(values[i]);
+        }
+        if (target != null && owner.IsValueType && self != 0) Unbox(owner, target, self);
+        return Keep(result);
+    }
+
+    public void SetFieldValue(nuint field, nuint obj, nuint value)
+    {
+        if (FieldOf(field) is not { } f) return;
+        f.SetValue(f.IsStatic ? null : ObjectAt(obj), ValueFrom(f.FieldType, value));
+    }
+
+    public nuint NewString(string text) => Keep(text);
+
+    public nuint NewHandle(nuint obj, bool pinned)
+    {
+        try
+        {
+            return (nuint)GCHandle.ToIntPtr(GCHandle.Alloc(ObjectAt(obj), pinned ? GCHandleType.Pinned : GCHandleType.Normal));
+        }
+        catch (ArgumentException)
+        {
+            // Only arrays and strings of plain values can be pinned
+            return 0;
+        }
+    }
+
+    public nuint HandleTarget(nuint handle) => handle == 0 ? 0 : Keep(GCHandle.FromIntPtr((nint)handle).Target);
+
+    public void FreeHandle(nuint handle)
+    {
+        if (handle != 0) GCHandle.FromIntPtr((nint)handle).Free();
+    }
+
+    public nuint TypeObject(nuint type) => Keep(TypeOf(type));
+
+    public nuint NewArray(nuint element, nuint length) => TypeOf(element) is { } t ? Keep(Array.CreateInstance(t, checked((int)length))) : 0;
 }

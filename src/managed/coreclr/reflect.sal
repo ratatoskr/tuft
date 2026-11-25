@@ -49,4 +49,25 @@ trait Reflector {
     u32 methodImplFlags(usize method);
     // Where calls to it go, compiled first. 0 for abstract methods and open generics.
     usize methodPointer(usize method);
+
+    // Objects are their addresses, which the garbage collector can move, so each is only good till
+    // it next runs. What these give back is kept alive a little while, for the caller to hold.
+
+    // The size of one of its values: its own for value types, a pointer's for references
+    u32 typeSize(usize type);
+    // this is null for statics, and points at the value for value types. args points at a pointer to
+    // each value-type argument, and holds objects as they are. Value results come back boxed. If it
+    // throws, exception gets it and this gives 0. A constructor without this makes a new object.
+    usize invoke(usize method, usize this, usize args, inout usize exception);
+    // value points at the value for value types, and is the object itself for references. Through
+    // the runtime, so the garbage collector hears about references.
+    void setFieldValue(usize field, usize obj, usize value);
+    usize newString(string text);
+    // A GCHandle. A pinned one keeps it from moving, which only arrays and strings of plain values allow.
+    usize newHandle(usize obj, bool pinned);
+    usize handleTarget(usize handle);
+    void freeHandle(usize handle);
+    // The System.Type
+    usize typeObject(usize type);
+    usize newArray(usize element, usize length);
 }
