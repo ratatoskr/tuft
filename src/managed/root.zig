@@ -536,13 +536,22 @@ pub const Runtime = union(Kind) {
 
     /// Where an array's items start. They're objects, or values for value types.
     pub fn arrayItems(self: *const Runtime, array: *Object) usize {
-        return @intFromPtr(array) + if (self.* == .coreclr) CoreClr.array_items_offset else array_items_offset;
+        return @intFromPtr(array) + @as(usize, if (self.* == .coreclr) CoreClr.array_items_offset else array_items_offset);
     }
 
     /// Whether this thread can call in without `attach`, like the game's own threads.
     pub fn attachedHere(self: *const Runtime) bool {
         return switch (self.*) {
             inline else => |*r| r.attachedHere(),
+        };
+    }
+
+    /// Goes up whenever what was found before could be gone, like a method's code once a mod loader
+    /// unloads its plugin. Only CoreCLR's changes.
+    pub fn changes(self: *const Runtime) u32 {
+        return switch (self.*) {
+            .coreclr => |*r| r.changes(),
+            else => 0,
         };
     }
 

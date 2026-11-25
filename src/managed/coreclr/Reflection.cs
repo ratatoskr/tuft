@@ -9,6 +9,8 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Loader;
+using System.Threading;
 
 namespace Tuft.CoreClr;
 
@@ -23,61 +25,137 @@ sealed unsafe class Reflection : IReflector
 {
     const BindingFlags All = BindingFlags.DeclaredOnly | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
 
-    sealed class Handle(nint value)
+    // Mod loaders like Dalamud unload plugins, which frees their types, fields and methods, and the
+    // runtime can put new ones where they were. So nothing here keeps a handle that could be freed
+    // without knowing it's gone, and `changes` goes up when tuft's names for handles could be wrong.
+
+    // Goes up when a load context unloads, or a handle comes back meaning something else. Never freed,
+    // since tuft reads it.
+    static readonly int* changes = (int*)NativeMemory.AllocZeroed(sizeof(int));
+
+    static void Changed() => Interlocked.Increment(ref *changes);
+
+    public nuint Changes() => (nuint)changes;
+
+    sealed class Id(nuint value)
     {
-        public readonly nint Value = value;
+        public readonly nuint Value = value;
     }
 
-    // Weak, so an assembly that's unloaded goes
-    readonly ConditionalWeakTable<Assembly, Handle> assemblies = new();
+    // Goes up once the load context it's kept for is collected, which is when its handles can be reused
+    sealed class Watch
+    {
+        ~Watch() => Changed();
+    }
+
+    // Shared by every Reflection, since joining again opens another. Assemblies are ids that are never used again, so an unloaded one's can't come to mean another
+    static readonly ConditionalWeakTable<Assembly, Id> assemblyIds = new();
+    static readonly Dictionary<nuint, WeakReference<Assembly>> assembliesById = new();
+    static nuint lastAssembly;
+    static readonly ConditionalWeakTable<AssemblyLoadContext, Watch> watched = new();
+    // Types that can be unloaded, by handle. Kept once they're gone, so a stale handle gives nothing
+    static readonly Dictionary<nint, WeakReference<Type>> collectible = new();
     // What declares each field and method, which looking one up by its handle needs for generic types
-    readonly Dictionary<nint, nint> fieldOwners = new();
-    readonly Dictionary<nint, nint> methodOwners = new();
-    readonly object gate = new();
+    static readonly Dictionary<nint, WeakReference<Type>> fieldOwners = new();
+    static readonly Dictionary<nint, WeakReference<Type>> methodOwners = new();
+    static readonly object gate = new();
 
-    nuint HandleOf(Assembly a) =>
-        (nuint)assemblies.GetValue(a, static x => new Handle(GCHandle.ToIntPtr(GCHandle.Alloc(x, GCHandleType.Weak)))).Value;
+    static nuint HandleOf(Assembly a)
+    {
+        lock (gate)
+        {
+            if (assemblyIds.TryGetValue(a, out var id)) return id.Value;
+            id = new Id(++lastAssembly);
+            assemblyIds.Add(a, id);
+            assembliesById[id.Value] = new(a);
+            if (a.IsCollectible && AssemblyLoadContext.GetLoadContext(a) is { } alc && !watched.TryGetValue(alc, out _))
+            {
+                watched.Add(alc, new Watch());
+                alc.Unloading += static _ => Changed();
+            }
+            return id.Value;
+        }
+    }
 
-    static Assembly? AssemblyOf(nuint h) => h == 0 ? null : GCHandle.FromIntPtr((nint)h).Target as Assembly;
+    static Assembly? AssemblyOf(nuint h)
+    {
+        lock (gate) return assembliesById.TryGetValue(h, out var w) && w.TryGetTarget(out var a) ? a : null;
+    }
 
-    static Type? TypeOf(nuint h) => h == 0 ? null : Type.GetTypeFromHandle(RuntimeTypeHandle.FromIntPtr((nint)h));
+    static Type? TypeOf(nuint h)
+    {
+        if (h == 0) return null;
+        lock (gate)
+        {
+            if (collectible.TryGetValue((nint)h, out var w)) return w.TryGetTarget(out var t) ? t : null;
+        }
+        return Type.GetTypeFromHandle(RuntimeTypeHandle.FromIntPtr((nint)h));
+    }
 
     static nuint HandleOf(Type? t)
     {
         if (t == null) return 0;
+        nint h;
         try
         {
-            return (nuint)t.TypeHandle.Value;
+            h = t.TypeHandle.Value;
         }
         catch (NotSupportedException)
         {
             return 0;
         }
+        if (t.IsCollectible) lock (gate) Remember(collectible, h, t);
+        return (nuint)h;
     }
 
-    FieldInfo? FieldOf(nuint h)
+    // Under gate. A handle whose last one's gone has been reused, so what tuft has for it is wrong.
+    static void Remember(Dictionary<nint, WeakReference<Type>> into, nint h, Type t)
+    {
+        if (into.TryGetValue(h, out var w))
+        {
+            if (!w.TryGetTarget(out var was)) Changed();
+            else if (ReferenceEquals(was, t)) return;
+        }
+        into[h] = new(t);
+    }
+
+    // Null once its type's gone, which a stale handle would need to be looked up
+    static RuntimeTypeHandle? OwnerOf(Dictionary<nint, WeakReference<Type>> owners, nuint h)
     {
         if (h == 0) return null;
-        nint owner;
-        lock (gate)
-        {
-            if (!fieldOwners.TryGetValue((nint)h, out owner)) return null;
-        }
-        return FieldInfo.GetFieldFromHandle(RuntimeFieldHandle.FromIntPtr((nint)h), RuntimeTypeHandle.FromIntPtr(owner));
+        lock (gate) return owners.TryGetValue((nint)h, out var w) && w.TryGetTarget(out var t) ? t.TypeHandle : null;
     }
 
-    MethodBase? MethodOf(nuint h)
+    static FieldInfo? FieldOf(nuint h) =>
+        OwnerOf(fieldOwners, h) is { } owner ? FieldInfo.GetFieldFromHandle(RuntimeFieldHandle.FromIntPtr((nint)h), owner) : null;
+
+    static MethodBase? MethodOf(nuint h) =>
+        OwnerOf(methodOwners, h) is { } owner ? MethodBase.GetMethodFromHandle(RuntimeMethodHandle.FromIntPtr((nint)h), owner) : null;
+
+    public nuint[] Assemblies()
     {
-        if (h == 0) return null;
-        nint owner;
+        var all = AppDomain.CurrentDomain.GetAssemblies().Select(HandleOf).ToArray();
+        // Ids are never reused, and a field or method with no owner gives nothing, so what's gone can
+        // just go. Not collectible types, whose handles would be looked up again if they went.
         lock (gate)
         {
-            if (!methodOwners.TryGetValue((nint)h, out owner)) return null;
+            foreach (var (id, w) in assembliesById)
+            {
+                if (!w.TryGetTarget(out _)) assembliesById.Remove(id);
+            }
+            Prune(fieldOwners);
+            Prune(methodOwners);
         }
-        return MethodBase.GetMethodFromHandle(RuntimeMethodHandle.FromIntPtr((nint)h), RuntimeTypeHandle.FromIntPtr(owner));
+        return all;
     }
 
-    public nuint[] Assemblies() => AppDomain.CurrentDomain.GetAssemblies().Select(HandleOf).ToArray();
+    static void Prune(Dictionary<nint, WeakReference<Type>> owners)
+    {
+        foreach (var (h, w) in owners)
+        {
+            if (!w.TryGetTarget(out _)) owners.Remove(h);
+        }
+    }
 
     public string AssemblyName(nuint assembly) => AssemblyOf(assembly) is { } a ? (a.GetName().Name ?? "") + ".dll" : "";
 
@@ -197,7 +275,7 @@ sealed unsafe class Reflection : IReflector
                 // A const, which has no handle
                 continue;
             }
-            lock (gate) fieldOwners[h] = (nint)type;
+            lock (gate) Remember(fieldOwners, h, t);
             list.Add((nuint)h);
         }
         return list.ToArray();
@@ -243,7 +321,7 @@ sealed unsafe class Reflection : IReflector
         foreach (var m in t.GetMethods(All).Cast<MethodBase>().Concat(t.GetConstructors(All)))
         {
             var h = m.MethodHandle.Value;
-            lock (gate) methodOwners[h] = (nint)type;
+            lock (gate) Remember(methodOwners, h, t);
             list.Add((nuint)h);
         }
         return list.ToArray();

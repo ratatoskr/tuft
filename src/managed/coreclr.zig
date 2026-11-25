@@ -9,6 +9,9 @@
 //!
 //! Types are the runtime's MethodTables, so `Class` and `Type` are the same handle. Fields and
 //! methods are its FieldDescs and MethodDescs. An image is its assembly.
+//!
+//! Mod loaders like Dalamud unload plugins, and the runtime can put new types where theirs were. A
+//! handle from one that's gone gives nothing, and `changes` goes up so callers can drop what they found.
 
 const std = @import("std");
 const sys = @import("tuft_sys");
@@ -18,7 +21,7 @@ const schema = @import("reflect_schema");
 const h = @import("handles.zig");
 
 /// The helper's IL, which only differs by pointer size.
-const helper = if (@sizeOf(usize) == 8) @embedFile("coreclr/bin/Tuft.CoreClr.64.dll") else @embedFile("coreclr/bin/Tuft.CoreClr.32.dll");
+pub const helper = if (@sizeOf(usize) == 8) @embedFile("coreclr/bin/Tuft.CoreClr.64.dll") else @embedFile("coreclr/bin/Tuft.CoreClr.32.dll");
 
 const Domain = h.Domain;
 const Assembly = h.Assembly;
@@ -78,7 +81,8 @@ pub const CoreClr = struct {
         const reflector = open_fn();
         if (reflector.table == null) return error.HelperFailed;
         const cache = try a.create(Cache);
-        cache.* = .{ .a = a };
+        cache.* = .{ .a = a, .changes = @ptrFromInt(reflector.changes()) };
+        cache.seen = @atomicLoad(u32, cache.changes, .acquire);
         return .{ .reflector = reflector, .cache = cache };
     }
 
@@ -87,6 +91,10 @@ pub const CoreClr = struct {
     const Cache = struct {
         a: std.mem.Allocator,
         lock: sys.sync.Mutex = .{},
+        /// The helper's, which goes up when a handle could mean something else now, like after a mod
+        /// loader unloads a plugin.
+        changes: *const u32,
+        seen: u32 = 0,
         names: std.AutoHashMapUnmanaged(Key, [:0]const u8) = .empty,
         lists: std.AutoHashMapUnmanaged(Key, []const usize) = .empty,
         sizes: std.AutoHashMapUnmanaged(usize, u32) = .empty,
@@ -95,13 +103,30 @@ pub const CoreClr = struct {
 
         const Key = struct { what: What, handle: usize };
         const What = enum(u8) { assembly, type, namespace, full_name, field, method, types, fields, methods, params };
+
+        /// Under `lock`. Forgets what it has once handles could be stale. Names and lists callers got
+        /// are left, since they may still have them.
+        fn catchUp(c: *Cache) void {
+            const now = @atomicLoad(u32, c.changes, .acquire);
+            if (now == c.seen) return;
+            c.seen = now;
+            c.names.clearRetainingCapacity();
+            c.lists.clearRetainingCapacity();
+            c.sizes.clearRetainingCapacity();
+        }
     };
+
+    /// Goes up whenever what was found before could be gone, like a method's code.
+    pub fn changes(self: *const CoreClr) u32 {
+        return @atomicLoad(u32, self.cache.changes, .acquire);
+    }
 
     fn name(self: *const CoreClr, what: Cache.What, handle: usize, comptime get: anytype) Name {
         if (handle == 0) return null;
         const c = self.cache;
         c.lock.lock();
         defer c.lock.unlock();
+        c.catchUp();
         const key: Cache.Key = .{ .what = what, .handle = handle };
         if (c.names.get(key)) |n| return n.ptr;
         const text = c.a.dupeSentinel(u8, get(self.reflector, handle), 0) catch return null;
@@ -116,6 +141,7 @@ pub const CoreClr = struct {
         const c = self.cache;
         c.lock.lock();
         defer c.lock.unlock();
+        c.catchUp();
         const key: Cache.Key = .{ .what = what, .handle = handle };
         if (c.lists.get(key)) |l| return l;
         const items = c.a.dupe(usize, get(self.reflector, handle)) catch return &.{};
@@ -151,8 +177,11 @@ pub const CoreClr = struct {
 
     pub fn detach(_: *const CoreClr, _: *Thread) void {}
 
+    /// Never, so callers send calls to a thread of their own. Any thread can call in, but not from a
+    /// fiber: CoreCLR hears a thread's ended from fiber-local storage, so deleting a fiber that called
+    /// in has it tear down a thread that's still running, and it kills the process.
     pub fn attachedHere(_: *const CoreClr) bool {
-        return true;
+        return false;
     }
 
     pub fn assemblies(self: *const CoreClr, allocator: std.mem.Allocator) ![]*Assembly {
@@ -284,6 +313,7 @@ pub const CoreClr = struct {
         const c = self.cache;
         c.lock.lock();
         defer c.lock.unlock();
+        c.catchUp();
         if (c.sizes.get(t)) |s| return s;
         const s = self.reflector.typeSize(t);
         c.sizes.put(c.a, t, s) catch {};

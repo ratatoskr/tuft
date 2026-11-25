@@ -147,4 +147,70 @@ test "reads a CoreCLR" {
 
     // Mono and IL2CPP's way of finding a class anywhere works too
     try testing.expectEqual(string, (try rt.findClassAnywhere(a, "System.String")).?);
+
+    try unloads(rt, corlib);
+}
+
+/// What a mod loader like Dalamud does to a plugin it reloads. What was found in it gives nothing
+/// once it's gone, rather than reading memory the runtime freed.
+fn unloads(rt: managed.Runtime, corlib: *managed.Image) !void {
+    const a = testing.allocator;
+    const ours = (try rt.findImage(a, "Tuft.CoreClr.dll")) orelse return error.NoHelper;
+
+    // A copy of the helper, from its bytes, into a load context that can unload
+    const byte = rt.findClass(corlib, "System", "Byte").?;
+    const bytes = rt.newHandle(rt.newArray(byte, managed.coreclr.helper.len) orelse return error.NoArray, true);
+    const bytes_at: [*]u8 = @ptrFromInt(rt.arrayItems(rt.handleTarget(bytes).?));
+    @memcpy(bytes_at, managed.coreclr.helper);
+    const stream_class = rt.findClass(corlib, "System.IO", "MemoryStream").?;
+    const from_bytes = blk: {
+        var it = rt.methods(stream_class);
+        while (it.next()) |m| {
+            if (!std.mem.eql(u8, rt.methodName(m), ".ctor") or rt.paramCount(m) != 1) continue;
+            if (rt.typeKind(rt.paramType(m, 0).?) == .szarray) break :blk m;
+        }
+        return error.NoMethod;
+    };
+    const stream = rt.newHandle(rt.invoke(from_bytes, null, &[_]?*anyopaque{rt.handleTarget(bytes)}, null) orelse return error.NoStream, false);
+    const context_class = rt.findClass(corlib, "System.Runtime.Loader", "AssemblyLoadContext").?;
+    var can_unload = true;
+    const context = rt.newHandle(rt.invoke(rt.findMethod(context_class, ".ctor", 2).?, null, &[_]?*anyopaque{ rt.newString("plugin"), &can_unload }, null) orelse return error.NoContext, false);
+    var thrown: ?*managed.Object = null;
+    _ = rt.invoke(rt.findMethod(context_class, "LoadFromStream", 1).?, rt.handleTarget(context), &[_]?*anyopaque{rt.handleTarget(stream)}, &thrown);
+    try testing.expectEqual(null, thrown);
+    rt.freeHandle(stream);
+    rt.freeHandle(bytes);
+
+    const list = try rt.assemblies(a);
+    defer a.free(list);
+    const theirs = for (list) |one| {
+        const image = rt.assemblyImage(one) orelse continue;
+        if (image != ours and std.mem.eql(u8, rt.imageName(image), "Tuft.CoreClr.dll")) break image;
+    } else return error.NotLoaded;
+    const exports = rt.findClass(theirs, "Tuft.CoreClr", "Exports") orelse return error.NoClass;
+    try testing.expectEqualStrings("Exports", rt.className(exports));
+    try testing.expect(rt.classCount(theirs) > 0);
+    try testing.expect(rt.findMethod(exports, "Open", 0) != null);
+    const before = rt.changes();
+
+    _ = rt.invoke(rt.findMethod(context_class, "Unload", 0).?, rt.handleTarget(context), null, &thrown);
+    try testing.expectEqual(null, thrown);
+    rt.freeHandle(context);
+    // What the helper gave back lately is kept a little while, so push it all out
+    for (0..64) |_| _ = rt.newString("");
+    const gc = rt.findClass(corlib, "System", "GC").?;
+    const collect = rt.findMethod(gc, "Collect", 0).?;
+    const finalizers = rt.findMethod(gc, "WaitForPendingFinalizers", 0).?;
+    for (0..50) |_| {
+        _ = rt.invoke(collect, null, null, null);
+        _ = rt.invoke(finalizers, null, null, null);
+        if (rt.className(exports).len == 0) break;
+        std.Io.sleep(testing.io, .fromMilliseconds(10), .awake) catch {};
+    } else return error.NeverUnloaded;
+
+    try testing.expect(rt.changes() != before);
+    try testing.expectEqual(0, rt.classCount(theirs));
+    try testing.expectEqual(null, rt.findMethod(exports, "Open", 0));
+    // Ours is still there
+    try testing.expectEqualStrings("Exports", rt.className(rt.findClass(ours, "Tuft.CoreClr", "Exports").?));
 }

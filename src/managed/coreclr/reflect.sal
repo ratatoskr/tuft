@@ -1,8 +1,14 @@
 // What tuft asks the C# helper it loads into a game's CoreCLR, which has no reflection API for
 // native code of its own. Types, fields and methods are the runtime's own handles, the values of
-// RuntimeTypeHandle, RuntimeFieldHandle and RuntimeMethodHandle, which stay put. Assemblies are
-// weak GC handles, so unloading one isn't held up. 0 is none.
+// RuntimeTypeHandle, RuntimeFieldHandle and RuntimeMethodHandle. Assemblies are ids that are never
+// used again. 0 is none.
+//
+// A mod loader can unload what it loaded, and the runtime can put new types, fields and methods
+// where they were. A stale handle gives nothing, and what changes points at goes up whenever names
+// kept for handles could be wrong, or code that was found could be gone.
 trait Reflector {
+    // Where a u32 is that goes up, never freed
+    usize changes();
     []usize assemblies();
     // Like Assembly-CSharp.dll
     string assemblyName(usize assembly);
