@@ -70,6 +70,8 @@ pub const sync = struct {
 pub const fiber = struct {
     /// A stack you switch into and out of, maybe on different threads.
     pub const Fiber = native.fiber.Fiber;
+    /// Whether this thread's running a fiber now, like a `Fiber` or one of the game's own.
+    pub const inFiber = native.fiber.inFiber;
 };
 
 pub const clock = struct {

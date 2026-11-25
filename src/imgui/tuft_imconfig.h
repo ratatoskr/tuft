@@ -7,6 +7,10 @@
 // No gamepads. XInput could wait on a stopped thread holding the loader lock
 #define IMGUI_IMPL_WIN32_DISABLE_GAMEPAD
 
+// ImGui's debug log stays in its Debug Log window. Printing it would go to stdout, which a game
+// doesn't read, and which a test runner talks to us through.
+#define IMGUI_DEBUG_PRINTF(_FMT, ...) ((void)0)
+
 #ifdef __cplusplus
 // Failed asserts go to `setAssertHandler` instead of killing the game.
 extern "C" void tuft_imgui_assert_failed(const char* expr, const char* file, int line);

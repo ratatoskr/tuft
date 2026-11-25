@@ -13,6 +13,11 @@ extern "kernel32" fn ConvertThreadToFiberEx(param: ?*anyopaque, flags: u32) call
 extern "kernel32" fn ConvertFiberToThread() callconv(.winapi) std.os.windows.BOOL;
 extern "kernel32" fn IsThreadAFiber() callconv(.winapi) std.os.windows.BOOL;
 
+/// `Fiber.resumeHere` only makes a thread a fiber while one runs, so outside them this is false.
+pub fn inFiber() bool {
+    return IsThreadAFiber().toBool();
+}
+
 /// The running fiber, from the thread's TEB. Only meaningful when `IsThreadAFiber`.
 fn currentFiber() *anyopaque {
     return switch (builtin.cpu.arch) {
@@ -93,11 +98,13 @@ const tests = struct {
         fiber: Fiber = undefined,
         steps: u32 = 0,
         threads: [3]u32 = @splat(0),
+        in_fiber: bool = false,
 
         fn run(f: *Fiber) void {
             const self: *Counter = @alignCast(@fieldParentPtr("fiber", f));
             for (0..3) |i| {
                 self.threads[i] = std.Thread.getCurrentId();
+                self.in_fiber = inFiber();
                 self.steps += 1;
                 f.yield();
             }
@@ -108,8 +115,10 @@ const tests = struct {
         var c: Counter = .{};
         try c.fiber.init(Counter.run, .{});
         defer c.fiber.deinit();
+        try testing.expect(!inFiber());
         c.fiber.resumeHere();
         try testing.expectEqual(1, c.steps);
+        try testing.expect(c.in_fiber);
         try testing.expect(!IsThreadAFiber().toBool());
         c.fiber.resumeHere();
         c.fiber.resumeHere();

@@ -177,11 +177,11 @@ pub const CoreClr = struct {
 
     pub fn detach(_: *const CoreClr, _: *Thread) void {}
 
-    /// Never, so callers send calls to a thread of their own. Any thread can call in, but not from a
-    /// fiber: CoreCLR hears a thread's ended from fiber-local storage, so deleting a fiber that called
-    /// in has it tear down a thread that's still running, and it kills the process.
+    /// Any thread that isn't running a fiber can call in, since the runtime sets one up as it does.
+    /// From a fiber it can't: CoreCLR hears a thread's ended from fiber-local storage, so deleting a
+    /// fiber that called in has it tear down a thread that's still running, and it kills the process.
     pub fn attachedHere(_: *const CoreClr) bool {
-        return false;
+        return !sys.fiber.inFiber();
     }
 
     pub fn assemblies(self: *const CoreClr, allocator: std.mem.Allocator) ![]*Assembly {
