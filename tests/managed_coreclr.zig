@@ -151,7 +151,7 @@ test "reads a CoreCLR" {
     try unloads(rt, corlib);
 }
 
-/// What a mod loader like Dalamud does to a plugin it reloads. What was found in it gives nothing
+/// What a mod loader does to a plugin it reloads. What was found in it gives nothing
 /// once it's gone, rather than reading memory the runtime freed.
 fn unloads(rt: managed.Runtime, corlib: *managed.Image) !void {
     const a = testing.allocator;

@@ -1,4 +1,4 @@
-//! .NET's CoreCLR, which games and mod loaders like Dalamud run C# on. It has no reflection API
+//! .NET's CoreCLR, which games and mod loaders run C# on. It has no reflection API
 //! for native code, so this joins the runtime the game's already running and loads a C# helper
 //! into it, then asks it. The helper's built from `coreclr/` by `zig build coreclr` and kept in
 //! `coreclr/bin`, so building tuft doesn't need the dotnet SDK.
@@ -10,7 +10,7 @@
 //! Types are the runtime's MethodTables, so `Class` and `Type` are the same handle. Fields and
 //! methods are its FieldDescs and MethodDescs. An image is its assembly.
 //!
-//! Mod loaders like Dalamud unload plugins, and the runtime can put new types where theirs were. A
+//! Mod loaders unload plugins, and the runtime can put new types where theirs were. A
 //! handle from one that's gone gives nothing, and `changes` goes up so callers can drop what they found.
 
 const std = @import("std");

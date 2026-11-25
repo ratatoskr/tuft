@@ -26,7 +26,7 @@ sealed unsafe class Reflection : IReflector
 {
     const BindingFlags All = BindingFlags.DeclaredOnly | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
 
-    // Mod loaders like Dalamud unload plugins, which frees their types, fields and methods, and the
+    // Mod loaders unload plugins, which frees their types, fields and methods, and the
     // runtime can put new ones where they were. So nothing here keeps a handle that could be freed
     // without knowing it's gone, and `changes` goes up when tuft's names for handles could be wrong.
 
