@@ -1,7 +1,7 @@
 .{
     .name = .tuft,
     .version = "0.0.0",
-    .minimum_zig_version = "0.18.0-dev.1295+1fb0e6330",
+    .minimum_zig_version = "0.18.0-dev.1298+4a0817482",
     .fingerprint = 0xf3ec3b68ca38da0c,
     .paths = .{
         "src",
@@ -14,8 +14,8 @@
     },
     .dependencies = .{
         .salamander = .{
-            .url = "git+https://github.com/ratatoskr/salamander.git#e584f349d572a61ef3deba7b9ebeaf810a9863bc",
-            .hash = "salamander-0.0.1-6ZeDNkovEgAMIdGj3jlEKMnlF3o2fgw51m0XOI0wKUoW",
+            .url = "git+https://github.com/ratatoskr/salamander.git#b474995a504b3e82197769b29e0f4b71f1629c56",
+            .hash = "salamander-0.0.1-6ZeDNoxXEgCam1uzRITaj2fTHVzxTPBko4MJg71X6mgZ",
         },
         .vulkan_headers = .{
             .url = "git+https://github.com/KhronosGroup/Vulkan-Headers?ref=v1.4.369#d277a0a3cda9c682708c93279f0c72cd6b0ae3f3",
