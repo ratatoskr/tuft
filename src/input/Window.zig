@@ -58,8 +58,7 @@ pub fn create(allocator: std.mem.Allocator, io: std.Io) !*Window {
     return self;
 }
 
-/// Pending tasks get dropped. Every `message` subscriber has to be gone first. If a task or message
-/// handler is still running after the waits, it's leaked instead, since that would still be using it.
+/// Drops pending tasks; `message` subscribers must be gone first. Leaks itself if a task or handler still runs after the waits.
 pub fn destroy(self: *Window) void {
     self.closeTasks();
     const unhooked = if (self.subclass) |s| s.uninstall() else true;

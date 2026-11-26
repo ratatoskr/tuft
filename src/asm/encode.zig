@@ -42,8 +42,7 @@ fn encodeMasked(insn: *const Instruction, address: usize, options: Options) erro
     };
 }
 
-/// An x64 `jmp`, `call` or `jcc` to somewhere more than 2 GB away, which goes through the address
-/// stored right after it. Like a hook's cave far from the game's code jumping back.
+/// An x64 `jmp`, `call` or `jcc` over 2 GB away, through the address stored right after it.
 fn farBranch(insn: *const Instruction, address: usize) ?Encoded {
     if (!root.is64 or insn.far or insn.operand_count != 1 or insn.operands[0] != .imm) return null;
     const target = insn.operands[0].imm;

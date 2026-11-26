@@ -22,11 +22,9 @@ allocator: std.mem.Allocator,
 window: Handle,
 handler: Handler,
 stub: usize,
-/// Sees keys as the window's thread takes them off its queue, for games whose loop doesn't dispatch
-/// them, like XNA's on WinForms. Null if it couldn't be hooked.
+/// Sees keys as they leave the window thread's queue, for loops that don't dispatch them, like XNA's. Null if unhooked.
 hook: ?win.HHOOK = null,
-/// The last key the hook handed over and let through, so the window proc doesn't hand it over
-/// again once it's dispatched. Window thread only.
+/// The last key the hook passed on, so the window proc doesn't pass it again once dispatched. Window thread only.
 queued: Queued = .{},
 
 const Queued = struct {
@@ -115,8 +113,7 @@ fn isKey(msg: u32) bool {
     return msg >= win.WM_KEYDOWN and msg <= win.WM_UNICHAR;
 }
 
-/// On the window's thread as it takes a message off its queue, before the game's loop does
-/// anything with it. One that's eaten turns into `WM_NULL`.
+/// On the window thread as a message leaves its queue, before the game's loop sees it. Eaten ones become `WM_NULL`.
 fn queueHook(code: i32, wparam: usize, lparam: isize) callconv(.winapi) isize {
     _ = hook_calls.fetchAdd(1, .seq_cst);
     defer _ = hook_calls.fetchSub(1, .seq_cst);
@@ -138,8 +135,7 @@ fn fromQueue(self: *Subclass, m: *win.MSG) void {
     if (@atomicLoad(usize, slot(self.stub, .handler), .seq_cst) == 0) return;
     const message: Message = .{ .window = self.window, .msg = m.message, .wparam = m.wParam, .lparam = m.lParam };
     if (self.handler.func(self.handler.ctx, &message) != null) {
-        // The game's loop won't translate it now, so the characters it types are made here, and
-        // come back through the queue for the handler
+        // The game's loop won't translate it now, so make its chars here; they come back through the queue
         if (m.message == win.WM_KEYDOWN or m.message == win.WM_SYSKEYDOWN) _ = win.TranslateMessage(m);
         m.message = win.WM_NULL;
         self.queued.set = false;
@@ -148,8 +144,8 @@ fn fromQueue(self: *Subclass, m: *win.MSG) void {
     self.queued = .{ .set = true, .msg = m.message, .wparam = m.wParam, .lparam = m.lParam, .time = m.time };
 }
 
-/// Puts the original back if nobody's on top. Frees once no handler call is running. False if one still
-/// was after the wait, so it's leaked, and whatever its handler uses has to be too.
+/// Restores the original if nobody's on top, and frees once no handler call runs. False if one still
+/// was after the wait: then it's leaked, and whatever its handler uses must be too.
 pub fn uninstall(self: *Subclass) bool {
     // Stub only forwards from now on
     @atomicStore(usize, slot(self.stub, .handler), 0, .seq_cst);

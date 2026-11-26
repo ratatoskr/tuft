@@ -25,8 +25,7 @@ pub const VTable = struct {
 
 /// Why a known name isn't anywhere right now.
 pub const Miss = struct {
-    /// NotFound when what it names isn't there, Unreadable when a pointer on the way can't be
-    /// read, InvalidAddress when its own text is wrong.
+    /// NotFound, Unreadable for a bad pointer on the way, or InvalidAddress for bad text.
     err: error{ NotFound, Unreadable, InvalidAddress },
     message: []const u8,
 };

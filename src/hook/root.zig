@@ -4,7 +4,7 @@ const std = @import("std");
 
 pub const Hook = @import("Hook.zig");
 pub const Patch = @import("Patch.zig");
-/// Data and the code that reads it, placed as one.
+/// Data and the code that reads it, placed together.
 pub const Batch = @import("Batch.zig");
 pub const TypedHook = @import("typed_hook.zig").TypedHook;
 pub const Timing = Hook.Timing;

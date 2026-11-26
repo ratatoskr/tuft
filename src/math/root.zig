@@ -1,8 +1,5 @@
-//! Vectors, quaternions and 4x4 matrices for game maths. They're laid out like C, so they cross
-//! into games and plugins as they are, and Wraith's schemas have the same ones.
-//!
-//! Matrices are row-major for row vectors, like D3D and most games: a point goes `p * m`, and
-//! `a.mul(b)` does `a` first, then `b`. Angles are radians.
+//! Vectors, quaternions and 4x4 matrices, C-layout so they cross into games and plugins as-is.
+//! Row-major for row vectors like D3D: `p * m`, and `a.mul(b)` applies `a` then `b`. Angles in radians.
 
 const std = @import("std");
 
@@ -269,8 +266,7 @@ pub const Quat = extern struct {
         return .{ .x = a.x, .y = a.y, .z = a.z, .w = @cos(radians / 2) };
     }
 
-    /// The one taking x, y and z onto `right`, `up` and `forward`, which must be at right angles
-    /// and unit length. Like a rotation matrix's rows.
+    /// Maps x, y, z onto `right`, `up`, `forward`, which must be orthonormal. Like a rotation matrix's rows.
     pub fn fromAxes(right: Vec3, up: Vec3, forward: Vec3) Quat {
         return Mat4.fromRows(right.withW(0), up.withW(0), forward.withW(0), .{ .w = 1 }).rotation();
     }
@@ -498,8 +494,7 @@ pub const Mat4 = extern struct {
         );
     }
 
-    /// Depth from 0 at `near` to 1 at `far`, like D3D and Vulkan. `fov_y` is the whole vertical
-    /// angle.
+    /// Depth 0 at `near` to 1 at `far`, like D3D and Vulkan. `fov_y` is the full vertical angle.
     pub fn perspective(fov_y: f32, aspect: f32, near: f32, far: f32, hand: Hand) Mat4 {
         const y = 1 / @tan(fov_y / 2);
         const x = y / aspect;

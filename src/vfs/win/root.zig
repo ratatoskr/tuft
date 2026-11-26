@@ -1,7 +1,5 @@
-//! The ntdll hooks. Everything that opens, reads, writes or closes files in user mode ends up here,
-//! kernel32, the CRT and engines alike.
-//!
-//! Virtual files get a real handle too, a signaled event, so waits and `CloseHandle` just work.
+//! The ntdll hooks, where all user-mode file I/O ends up. Virtual files get a real handle too,
+//! a signaled event, so waits and `CloseHandle` just work.
 
 const std = @import("std");
 

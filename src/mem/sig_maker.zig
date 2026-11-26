@@ -1,6 +1,5 @@
-//! Makes a signature for an address: the shortest unique pattern at it, or at code that points
-//! to it with `Rip` to get back. Immediates and displacements are wildcards, since they change
-//! between builds.
+//! Makes the shortest unique signature at an address, or at code pointing to it via `Rip`.
+//! Immediates and displacements are wildcards, since they change between builds.
 
 const std = @import("std");
 
@@ -71,8 +70,7 @@ pub fn make(arena: std.mem.Allocator, code: []const u8, base: usize, target: usi
     return best;
 }
 
-/// Code that points at `target`: relative branches and operands, plus absolute ones on x86.
-/// Conditional branches are left out, since they're rarely what's wanted. Addresses, in order.
+/// Code that points at `target`, in order. Skips conditional branches, they're rarely wanted.
 pub fn references(arena: std.mem.Allocator, code: []const u8, base: usize, target: usize, options: Options) ![]usize {
     var out: std.ArrayList(usize) = .empty;
     if (code.len < 5) return out.items;
@@ -100,8 +98,7 @@ fn startOf(code: []const u8, base: usize, q: usize, target: usize) ?usize {
     while (back <= @min(q, insn.max_len - 4)) : (back += 1) {
         const s = q - back;
         if (!pointsAt(code, base, s, back, target)) continue;
-        // Take its prefixes too, like REX.W. Branches don't have any, so a byte before one is the
-        // last instruction's
+        // Take its prefixes too, like REX.W. Branches have none, so a byte before one isn't theirs
         const flow = (insn.layoutOf(code[s..@min(code.len, s + insn.max_len)]) catch unreachable).flow;
         if (flow == .call or flow == .jump) return s;
         var start = s;
@@ -131,8 +128,7 @@ fn isLegacyPrefix(b: u8) bool {
     };
 }
 
-/// Adds instructions from `start` till the pattern's unique. Its length then, or null if it got
-/// to `limit`, the end of the function, or code it can't decode.
+/// Adds instructions from `start` till the pattern's unique. Null at `limit`, a function end or bad code.
 fn grow(arena: std.mem.Allocator, code: []const u8, counts: *const [256]u32, start: usize, options: Options, limit: usize, buf: []?u8, hits: *std.ArrayList(usize)) !?usize {
     var n: usize = 0;
     var pos = start;
@@ -169,8 +165,7 @@ fn grow(arena: std.mem.Allocator, code: []const u8, counts: *const [256]u32, sta
     }
 }
 
-/// False if there are too many to keep. Jumps between the pattern's rarest fixed byte, which
-/// beats `pattern.find` here since code's full of a few bytes like E8 and 48.
+/// False if there are too many to keep. Jumps on the rarest fixed byte, since code is full of E8 and 48.
 fn collect(arena: std.mem.Allocator, code: []const u8, counts: *const [256]u32, p: pattern.Pattern, hits: *std.ArrayList(usize)) !bool {
     hits.clearRetainingCapacity();
     var anchor: usize = 0;
@@ -235,8 +230,7 @@ pub fn format(p: pattern.Pattern, buf: []u8) []const u8 {
 const tests = struct {
     const testing = std.testing;
 
-    // A fake module's code. Operand values are wildcards, so only opcodes and registers tell
-    // these apart.
+    // Operand values are wildcards, so only opcodes and registers tell these apart
     const base: usize = 0x1000_0000;
 
     fn code() [64]u8 {

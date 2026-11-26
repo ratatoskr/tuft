@@ -88,8 +88,7 @@ pub fn begin(self: *Selection, row_count: usize, ids: anytype, options: Options)
     self.activated = false;
     self.prune(row_count, ids);
     var flags: c.ImGuiMultiSelectFlags = c.ImGuiMultiSelectFlags_ClearOnEscape;
-    // ImGui counts a popup begun inside the list, like its right-click menu, as part of the list.
-    // Clicks in it would land on the list's empty space and never reach the popup's items
+    // ImGui treats popups begun inside the list as part of it, so their clicks would hit the list
     const popup = raw("ImGui_IsPopupOpen")(root.str(""), c.ImGuiPopupFlags_AnyPopupId | c.ImGuiPopupFlags_AnyPopupLevel);
     if (!popup) flags |= c.ImGuiMultiSelectFlags_ClearOnClickVoid | c.ImGuiMultiSelectFlags_BoxSelect1d;
     if (options.single) flags |= c.ImGuiMultiSelectFlags_SingleSelect;

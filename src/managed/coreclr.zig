@@ -1,17 +1,6 @@
-//! .NET's CoreCLR, which games and mod loaders run C# on. It has no reflection API
-//! for native code, so this joins the runtime the game's already running and loads a C# helper
-//! into it, then asks it. The helper's built from `coreclr/` by `zig build coreclr` and kept in
-//! `coreclr/bin`, so building tuft doesn't need the dotnet SDK.
-//!
-//! Objects move under CoreCLR's garbage collector, unlike Mono's and IL2CPP's, so an object's
-//! address is only good till it next runs. Hold one with `newHandle` and get where it is now with
-//! `handleTarget`. What the helper gives back is kept alive a little while, for that.
-//!
-//! Types are the runtime's MethodTables, so `Class` and `Type` are the same handle. Fields and
-//! methods are its FieldDescs and MethodDescs. An image is its assembly.
-//!
-//! Mod loaders unload plugins, and the runtime can put new types where theirs were. A
-//! handle from one that's gone gives nothing, and `changes` goes up so callers can drop what they found.
+//! CoreCLR reflection: joins the running runtime and queries an embedded C# helper (`zig build coreclr`).
+//! Objects move with the GC, so hold them with `newHandle` and resolve with `handleTarget`.
+//! `Class` and `Type` are both MethodTables. `changes` bumps when plugins unload and handles go stale.
 
 const std = @import("std");
 const sys = @import("tuft_sys");
@@ -39,7 +28,7 @@ const Iter = *?*anyopaque;
 /// The runtime's library, there once a game's started one.
 pub const modules = [_][]const u8{clr.fxr.coreclr_name};
 
-/// What the helper's config asks for. The running runtime has to be at least this to join it.
+/// The running runtime must be at least this version to join.
 const runtime_config =
     \\{"runtimeOptions":{"tfm":"net10.0","rollForward":"LatestMajor","framework":{"name":"Microsoft.NETCore.App","version":"10.0.0"}}}
 ;
@@ -66,8 +55,7 @@ pub const CoreClr = struct {
         messages: ?*std.Io.Writer = null,
     };
 
-    /// Joins the CoreCLR this process runs and loads the helper into it. Lives as long as the
-    /// process, and so does `a`.
+    /// Joins this process's CoreCLR and loads the helper. Lives for the process, as must `a`.
     pub fn open(a: std.mem.Allocator, io: std.Io, options: Options) OpenError!CoreClr {
         if (!options.start and !clr.running()) return error.NotRunning;
         const config = try std.fs.path.join(a, &.{ options.dir, "tuft-coreclr.runtimeconfig.json" });
@@ -75,7 +63,7 @@ pub const CoreClr = struct {
         std.Io.Dir.cwd().createDirPath(io, options.dir) catch return error.ConfigFailed;
         std.Io.Dir.cwd().writeFile(io, .{ .sub_path = config, .data = runtime_config }) catch return error.ConfigFailed;
         const host = try clr.Host.open(a, io, .{ .runtime_config = config, .join_only = !options.start, .messages = options.messages });
-        // Already there when something in this process opened it before, which loading again refuses
+        // Fails harmlessly if already loaded by an earlier open in this process
         host.loadBytes(helper, null) catch {};
         const open_fn = host.function(*const fn () callconv(clr.cc) schema.Reflector, a, "Tuft.CoreClr.Exports, Tuft.CoreClr", "Open") catch return error.HelperFailed;
         const reflector = open_fn();
@@ -86,13 +74,11 @@ pub const CoreClr = struct {
         return .{ .reflector = reflector, .cache = cache };
     }
 
-    /// What the helper gives back is only good till it's called again, so names and lists are
-    /// copied once and kept, like Mono's are.
+    /// Helper results only last till its next call, so names and lists are copied and kept.
     const Cache = struct {
         a: std.mem.Allocator,
         lock: sys.sync.Mutex = .{},
-        /// The helper's, which goes up when a handle could mean something else now, like after a mod
-        /// loader unloads a plugin.
+        /// The helper's counter; bumps when handles may mean something else, like after a plugin unload.
         changes: *const u32,
         seen: u32 = 0,
         names: std.AutoHashMapUnmanaged(Key, [:0]const u8) = .empty,
@@ -104,8 +90,7 @@ pub const CoreClr = struct {
         const Key = struct { what: What, handle: usize };
         const What = enum(u8) { assembly, type, namespace, full_name, field, method, types, fields, methods, params };
 
-        /// Under `lock`. Forgets what it has once handles could be stale. Names and lists callers got
-        /// are left, since they may still have them.
+        /// Under `lock`. Drops stale lookups but leaves names and lists callers may still hold.
         fn catchUp(c: *Cache) void {
             const now = @atomicLoad(u32, c.changes, .acquire);
             if (now == c.seen) return;
@@ -160,8 +145,7 @@ pub const CoreClr = struct {
         return @intFromPtr(p);
     }
 
-    // Threads that call in are set up by the runtime itself, so there's nothing to attach, but
-    // callers want something back
+    // The runtime sets up calling threads itself, so attach has nothing to do
 
     pub fn started(_: *const CoreClr) bool {
         return true;
@@ -177,9 +161,8 @@ pub const CoreClr = struct {
 
     pub fn detach(_: *const CoreClr, _: *Thread) void {}
 
-    /// Any thread that isn't running a fiber can call in, since the runtime sets one up as it does.
-    /// From a fiber it can't: CoreCLR hears a thread's ended from fiber-local storage, so deleting a
-    /// fiber that called in has it tear down a thread that's still running, and it kills the process.
+    /// Any non-fiber thread can call in. Not fibers: deleting one that called in makes CoreCLR
+    /// tear down its still-running thread, killing the process.
     pub fn attachedHere(_: *const CoreClr) bool {
         return !sys.fiber.inFiber();
     }
@@ -336,7 +319,7 @@ pub const CoreClr = struct {
         return null;
     }
 
-    /// Read straight from the object, which needs nothing from the garbage collector.
+    /// Read straight from the object; needs nothing from the GC.
     pub fn fieldValue(self: *const CoreClr, o: *Object, f: *Field, out: *anyopaque) void {
         const offset = self.fieldOffset(f);
         if (offset == std.math.maxInt(usize)) return;
@@ -388,8 +371,7 @@ pub const CoreClr = struct {
         return self.reflector.methodImplFlags(id(m));
     }
 
-    /// Where calls to it go. It may be a stub the runtime moves on to newer code from, but calls
-    /// always go through it, so it's what to hook.
+    /// May be a stub the runtime retargets, but calls always go through it, so hook this.
     pub fn methodPointer(self: *const CoreClr, m: *Method) ?usize {
         const at = self.reflector.methodPointer(id(m));
         return if (at == 0) null else at;
@@ -428,8 +410,7 @@ pub const CoreClr = struct {
 
     // Through the helper
 
-    /// Zeroed and not constructed. The garbage collector can move it, so construct it straight
-    /// away, or make it with `invoke` on a constructor and no `this`, which does both at once.
+    /// Zeroed and unconstructed. It can move, so construct it at once, or `invoke` a constructor with no `this`.
     pub fn newObject(self: *const CoreClr, c: *Class) ?*Object {
         return of(Object, self.reflector.newObject(id(c)));
     }

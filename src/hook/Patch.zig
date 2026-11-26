@@ -87,8 +87,7 @@ pub const ExpectOptions = struct {
     resolver: ?tuft_asm.Resolver = null,
 };
 
-/// A byte pattern like `89 83 ?? ??` if it's only bytes and `??`, else asm like `cmp ecx, eax;
-/// cmovl ax, cx`, compared disassembled so any encoding of it matches. How many bytes it covers.
+/// Bytes covered by a pattern like `89 83 ?? ??`, or asm like `cmp ecx, eax` matched in any encoding.
 pub fn expected(address: usize, text: []const u8, options: ExpectOptions) !usize {
     if (isPattern(text)) {
         var buf: [max_len]?u8 = undefined;
@@ -130,8 +129,7 @@ fn isPattern(text: []const u8) bool {
 }
 
 pub const ReplaceOptions = struct {
-    /// Bytes to replace, ending between instructions. 0 is what `expect` covers, or else the
-    /// instruction there.
+    /// Bytes to replace, ending between instructions. 0 means what `expect` covers, or one instruction.
     size: usize = 0,
     /// A byte pattern or asm the code there has to be, see `expected`.
     expect: ?[]const u8 = null,
@@ -149,11 +147,8 @@ pub const Replacement = union(enum) {
     hook: *Hook,
 };
 
-/// Replaces code at `address` with what `code` builds. In place if it fits and doesn't need
-/// `original`, else wherever `Placement` puts it, running any other instructions its jump covered
-/// after it. `code` is built for in place first, with no `original`. It returns
-/// `error.NeedsCave` or `error.TooLong` if it can't go there, like when it can't reach its data
-/// from there. Starts disabled.
+/// Replaces code at `address` with what `code` builds, in place if it fits, else in a cave. Starts disabled.
+/// `code` is tried in place first with no `original`, returning `error.NeedsCave` or `error.TooLong` to move.
 pub fn replace(address: usize, code: Hook.InjectBuild, options: ReplaceOptions) !Replacement {
     const size = try replaceSize(address, options);
     var buf: [max_len]u8 = undefined;

@@ -78,8 +78,7 @@ foreground: bool = false,
 raise_pending: bool = false,
 icons: [2]?*anyopaque = .{ null, null },
 
-/// Starts its thread, which makes the window, hidden. Doesn't wait for that, since the window and
-/// its graphics device take a while, so `failed` says later if it didn't work.
+/// Starts its thread, which makes the window hidden. Doesn't wait; check `failed` later.
 pub fn create(allocator: std.mem.Allocator, options: Options) !*AppWindow {
     const self = try allocator.create(AppWindow);
     errdefer allocator.destroy(self);
@@ -157,8 +156,7 @@ pub fn takeRaise(self: *AppWindow) bool {
     return self.raise_pending;
 }
 
-/// A `show` whose raise hasn't been taken by a frame yet. It focuses the main window, so focus wanted
-/// elsewhere has to wait for it. Its thread.
+/// A `show` raise not yet taken by a frame; other focus requests wait for it. Its thread.
 pub fn raising(self: *const AppWindow) bool {
     return self.raise_pending or self.want_raise.load(.acquire);
 }
@@ -288,10 +286,8 @@ fn close(self: *AppWindow, context: ?*c.ImGuiContext) void {
     }
 }
 
-/// ImGui's Win32 backend shares one window class, "ImGui Platform", between every context in the
-/// process, and each one's shutdown takes it out if no window's using it right then. Like when the
-/// crash window closes with the workbench hidden. So it goes back in before every window, and
-/// shutdowns wait while one's being made.
+/// ImGui's Win32 backend shares one window class across contexts and any shutdown can unregister it,
+/// so it's re-registered before every window and shutdowns wait while one's being made.
 const platform_class = struct {
     const name = std.unicode.utf8ToUtf16LeStringLiteral("ImGui Platform");
     var lock: sys.sync.RwLock = .{};

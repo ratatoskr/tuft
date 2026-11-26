@@ -31,8 +31,7 @@ pub fn allocNear(target_addr: usize, size: usize) !?PageSlice {
     return allocNearSpan(target_addr, target_addr +| 1, size);
 }
 
-/// Within rel32 reach of every address from `start` up to `end`, like a whole module. Null if
-/// there's no room.
+/// Within rel32 reach of all of `start` to `end`, like a whole module. Null if there's no room.
 pub fn allocNearSpan(start: usize, end: usize, size: usize) !?PageSlice {
     if (size == 0) return error.InvalidSize;
     if (arch.near_reaches_all) return try allocAny(size);
@@ -156,8 +155,7 @@ pub const Unlocked = struct {
     len: usize,
     old: zwin.PAGE,
 
-    /// Inside what was unlocked. No system calls bar the icache flush, so it's fine with every
-    /// other thread frozen.
+    /// Inside what was unlocked. No syscalls besides the icache flush, so fine with other threads frozen.
     pub fn write(self: Unlocked, at: usize, bytes: []const u8) void {
         std.debug.assert(at >= self.addr and at + bytes.len <= self.addr + self.len);
         const target: [*]u8 = @ptrFromInt(at);

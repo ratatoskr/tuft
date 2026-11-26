@@ -1,6 +1,5 @@
-//! A lock that hands itself straight to the longest waiter when it's let go of, so nobody can cut in
-//! ahead and whoever waits can be anything: a thread, a parked fiber, a promise. Threads wait on an
-//! event with `lock`. Anything else brings its own `Waiter` to `lockOr`. Not reentrant.
+//! A FIFO lock handed straight to the longest waiter on unlock, so nobody cuts in. Not reentrant.
+//! Threads wait with `lock`. Anything else, like a fiber or promise, brings a `Waiter` to `lockOr`.
 
 const Mutex = @This();
 
@@ -25,8 +24,7 @@ pub fn tryLock(self: *Mutex) bool {
     return self.held.cmpxchgStrong(false, true, .acquire, .monotonic) == null;
 }
 
-/// True if it's yours now. Otherwise `w` waits in line and `w.wake` runs once it's yours. `w` has to
-/// stay put till then, or till `cancel` takes it out.
+/// True if it's yours now. Otherwise `w` queues and `w.wake` runs once it is; `w` must stay put till then or `cancel`.
 pub fn lockOr(self: *Mutex, w: *Waiter) bool {
     self.acquireGuard();
     defer self.releaseGuard();
@@ -37,8 +35,7 @@ pub fn lockOr(self: *Mutex, w: *Waiter) bool {
     return false;
 }
 
-/// Takes `w` out of line. False if it wasn't in it, which means the lock's been handed to it, and
-/// `wake` runs or ran for it. Then it's `w`'s to let go of.
+/// Takes `w` out of line. False if the lock was already handed to it (`wake` runs or ran), so it's `w`'s to unlock.
 pub fn cancel(self: *Mutex, w: *Waiter) bool {
     self.acquireGuard();
     defer self.releaseGuard();

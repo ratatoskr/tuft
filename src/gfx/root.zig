@@ -63,9 +63,8 @@ pub const Frame = extern struct {
     color_space: ColorSpace = .srgb,
 };
 
-/// What a game or game engine plugin says the game's output is, like Unreal saying HDR's on. For
-/// when the swap chain can't say, like a 10-bit one we joined late: what the game set on it itself
-/// still wins. Any thread.
+/// What a game or engine plugin says the output is, like Unreal saying HDR's on, for when the swap
+/// chain can't say. What the game set on the swap chain still wins. Any thread.
 pub const color_space_hint = struct {
     const Atomic = @import("tuft_arch").atomic.Value;
     const none = std.math.maxInt(u32);

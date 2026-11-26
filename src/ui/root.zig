@@ -144,15 +144,13 @@ fn displaySize() Vec2 {
     return .{ if (d[0] > 0) d[0] else std.math.floatMax(f32), if (d[1] > 0) d[1] else std.math.floatMax(f32) };
 }
 
-/// Pixels ImGui draws to, the game window in an overlay or the main viewport with viewports on.
-/// Starts at `getMainViewportPos` in the screen pixels draw lists use. 0 before the first frame.
+/// Pixels ImGui draws to, starting at `getMainViewportPos`. 0 before the first frame.
 pub fn getDisplaySize() Vec2 {
     const d = raw("ImGui_GetIO")().*.DisplaySize;
     return .{ d.x, d.y };
 }
 
-/// Where `getDisplaySize`'s area starts in screen pixels. 0,0 unless viewports are on, as in a
-/// workbench, where it's the main window's corner on the desktop.
+/// Where `getDisplaySize`'s area starts in screen pixels. 0,0 unless viewports are on.
 pub fn getMainViewportPos() Vec2 {
     return fromVec2(raw("ImGui_GetMainViewport")().*.Pos);
 }
@@ -496,8 +494,7 @@ pub fn textColored(color: Color, comptime fmt: []const u8, args: anytype) void {
     raw("ImGui_TextColoredUnformatted")(vec4(color), str(format(fmt, args)));
 }
 
-/// `color` for `col` until `end`, like an error line's text. Takes ImGui's packed ABGR `u32`, a
-/// `Color` or an `ImVec4`. Null changes nothing. `col` is a `Col` or ImGui's own number for one.
+/// `color` for `col` until `end`. Takes a packed ABGR `u32`, `Color` or `ImVec4`; null changes nothing.
 pub fn withColor(col: anytype, color: anytype) StyleColors {
     const T = @TypeOf(color);
     if (@typeInfo(T) == .optional) return if (color) |v| withColor(col, v) else .{ .n = 0 };
@@ -568,8 +565,7 @@ pub fn buttonSized(label: [:0]const u8, size: Vec2) bool {
     return raw("ImGui_ButtonEx")(str(label), vec2(size));
 }
 
-/// Just an icon, like `icons.x ++ "##clear"`. Square and as tall as an input, so it lines up
-/// with one. The tip shows on hover, if there is one.
+/// Square icon button as tall as an input, like `icons.x ++ "##clear"`.
 pub fn iconButton(label: [:0]const u8, tip: []const u8) bool {
     const h = frameHeight();
     const visible = label[0 .. std.mem.indexOf(u8, label, "##") orelse label.len];
@@ -625,8 +621,7 @@ pub fn slider(label: [:0]const u8, value: anytype, min: std.meta.Child(@TypeOf(v
     };
 }
 
-/// Drag box for an `f32` or `i32`, or a row of them for a `Vec2`, `Vec3` or `Vec4` from tuft_math.
-/// Double-click to type.
+/// Drag box for an `f32`, `i32` or tuft_math vector. Double-click to type.
 pub fn drag(label: [:0]const u8, value: anytype, speed: f32) bool {
     return switch (std.meta.Child(@TypeOf(value))) {
         f32 => raw("ImGui_DragFloatEx")(str(label), value, speed, 0, 0, str("%.3f"), 0),

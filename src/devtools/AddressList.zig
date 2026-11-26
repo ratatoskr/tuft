@@ -1,6 +1,4 @@
-//! Cheat Engine style list of watched addresses, with groups and held values. Entries can be a
-//! layout type or an array, shown opened up into rows that aren't saved. Plain ones can be a few
-//! bits of their value, show it as one of a list of choices, and have hotkeys.
+//! Cheat Engine style list of watched addresses, with groups, held values, typed entries and hotkeys.
 
 const AddressList = @This();
 
@@ -386,15 +384,13 @@ fn bitRow(self: *const AddressList, node: *const Node, at: usize) ?Row {
     return .{ .id = seedOf(node), .parent = 0, .depth = node.depth, .kind = .bits, .offset = 0, .address = at, .name = node.name.get(), .index = b.shift, .width = b.width, .type = t, .size = b.backing.size(8), .ref = ref };
 }
 
-/// The layouts typed entries can use, earlier ones first when names clash. `sources` say where
-/// each is from, like a plugin's name, shown next to its types. Empty ones and a short or empty
-/// `sources` show nothing. Rows made from the old ones are dropped.
+/// The layouts typed entries can use, earlier ones winning name clashes. `sources` labels each one.
+/// Rows made from the old ones are dropped.
 pub fn setSchemas(self: *AddressList, schemas: []const *const Schema, sources: []const []const u8) void {
     self.setSchemasFrom(schemas, sources, &.{});
 }
 
-/// Like `setSchemas`, but types before `from[i]` in schema `i`'s source aren't offered, like ones
-/// every schema's read after. They can still be used.
+/// Like `setSchemas`, but types before `from[i]` in schema `i`'s source aren't offered, only usable.
 pub fn setSchemasFrom(self: *AddressList, schemas: []const *const Schema, sources: []const []const u8, from: []const usize) void {
     self.schemas = schemas;
     self.forgetRows();
@@ -579,8 +575,7 @@ pub fn moveInto(self: *AddressList, i: usize, target: ?usize) !void {
 
 pub const Place = ui.Reorder.Place;
 
-/// Moves every picked entry if `dragged` is picked, else just it. `.after` a group goes after
-/// what's in it too.
+/// Moves every picked entry if `dragged` is picked, else just it. `.after` a group skips its contents.
 pub fn moveTo(self: *AddressList, dragged: u64, key: u64, place: Place) !void {
     const gpa = self.allocator;
     const nodes = self.nodes.items;
@@ -878,8 +873,7 @@ pub fn resolveItem(memory: Memory, symbols: Symbols, all: []const Item, i: usize
     return resolveText(memory, symbols, item.address, item.offsets, base, null);
 }
 
-/// `address` is `tuft_mem.Location` text, from `base` if it starts with + or -, then each
-/// offset is added to the pointer there.
+/// `address` is `tuft_mem.Location` text, from `base` if it starts with + or -, then pointer offsets.
 pub fn resolveText(memory: Memory, symbols: Symbols, address: []const u8, offsets: []const []const u8, base: ?usize, problem: ?*Location.Problem) !usize {
     var at = try Location.eval(address, .{ .symbols = symbols, .memory = memory, .base = base }, problem);
     for (offsets) |offset| {
@@ -911,8 +905,7 @@ fn itemBaseGroup(all: []const Item, i: usize) ?usize {
     return null;
 }
 
-/// Location text for where item `i` is, with its pointers and its groups' folded in, like
-/// `[(game.exe+0x10)+0x8]+0x4`. So it's found without the list. In `arena`.
+/// Standalone location text for item `i`, like `[(game.exe+0x10)+0x8]+0x4`. In `arena`.
 pub fn locationOf(all: []const Item, i: usize, arena: std.mem.Allocator) ![]const u8 {
     const item = all[i];
     const own = std.mem.trim(u8, item.address, " \t");
@@ -1465,8 +1458,7 @@ fn textOf(path: []const u8) Text(max_path) {
     return t;
 }
 
-/// Whether `h` holds the value at `index` and `path` as part of what it holds. Not through a
-/// pointer, since what's pointed at isn't in it.
+/// Whether `h` covers the value at `index` and `path`. Not through a pointer.
 fn covers(h: *const Hold, index: ?usize, path: []const u8) bool {
     if (h.index) |n| {
         if (index != n) return false;
@@ -1587,8 +1579,7 @@ pub fn enforce(self: *AddressList) void {
     }
 }
 
-/// Puts `held` back where it's changed, leaving bits that aren't held as they are. A change
-/// `freeze` allows is kept instead, and held from then on.
+/// Puts `held` back where it's changed, only its held bits. A change `freeze` allows is kept and held.
 fn putBack(self: *AddressList, spot: Spot, held: []u8, kind: ?Kind, freeze: Freeze) void {
     var current: [max_len]u8 = undefined;
     const len = held.len;
@@ -1678,8 +1669,7 @@ pub fn hotkeyLabel(buf: []u8, name: []const u8, action: Action, value: []const u
     return out catch name;
 }
 
-/// Does what entry `node`'s hotkey `index` does, like its keys were pressed. Nothing if either's
-/// gone.
+/// Does what entry `node`'s hotkey `index` does, like its keys were pressed.
 pub fn pressHotkey(self: *AddressList, node: u64, index: usize) void {
     const i = self.indexOfKey(node) orelse return;
     const n = &self.nodes.items[i];
@@ -2223,8 +2213,7 @@ fn drawValue(self: *AddressList, i: usize, node: *Node, where: anyerror!usize) v
     ui.text("{s}", .{shown orelse "??"});
 }
 
-/// True once Enter is pressed or a choice is picked. With choices there's an arrow for them,
-/// filtered by what's typed.
+/// True once Enter is pressed or a choice is picked.
 fn drawEditBox(self: *AddressList, labels: ?Labels) bool {
     if (self.focus_edit) {
         ui.focusNext();

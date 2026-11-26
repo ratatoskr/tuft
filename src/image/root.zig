@@ -1,6 +1,5 @@
-//! Images as plain RGBA8 on the CPU. Decodes PNG, JPEG, BMP, TGA and GIF's first frame. Converts raw
-//! pixels and frame captures. Encodes PNG, and EXR for HDR. It's all slow, so keep it off the render
-//! thread. Only needs libc, so plugins can use it too.
+//! CPU RGBA8 images: decodes PNG, JPEG, BMP, TGA and GIF, converts captures, encodes PNG and EXR.
+//! Slow, so keep it off the render thread. Needs only libc, so plugins can use it.
 
 const std = @import("std");
 
@@ -93,8 +92,7 @@ pub fn decode(gpa: std.mem.Allocator, bytes: []const u8) Error!Image {
 
 pub const RawFormat = enum { rgba8, bgra8, bgrx8 };
 
-/// 8-bit pixels in rows `pitch` bytes apart, 0 meaning packed. Alpha is kept except for `bgrx8`.
-/// For HDR or 10-bit pixels use `fromCapture`.
+/// 8-bit pixels in rows `pitch` bytes apart (0 = packed). Alpha kept except `bgrx8`. HDR: use `fromCapture`.
 pub fn fromRaw(gpa: std.mem.Allocator, width: u32, height: u32, format: RawFormat, pitch: u32, bytes: []const u8) Error!Image {
     if (width == 0 or height == 0) return error.InvalidImage;
     if (width > max_side or height > max_side) return error.TooBig;
@@ -136,9 +134,8 @@ pub const Linear = struct {
         exposure: f32 = 0,
     };
 
-    /// Opaque RGBA8 in sRGB. HDR gets scaled so SDR white is 1 and `exposure` applied, then
-    /// highlights are pulled in towards the brightest pixel with one curve for all channels, so
-    /// they don't clip each on their own and shift color. SDR is just encoded back.
+    /// Opaque sRGB RGBA8. HDR is scaled so SDR white is 1, exposed, then highlights rolled off with one
+    /// curve for all channels so they don't clip separately and shift color.
     pub fn sdr(self: Linear, allocator: std.mem.Allocator, options: SdrOptions) Error!Image {
         const white = self.sdr_white_nits;
         const exposure = options.exposure;
@@ -166,9 +163,8 @@ pub const Linear = struct {
     }
 };
 
-/// A frame capture's pixels as linear light. `capture` is anything with `width`, `height`, `pitch`,
-/// `format`, `color_space`, `sdr_white_nits` and `pixels`, with enums named like ours. Like
-/// `tuft_imgui.capture.Image` or the plugin API's `Image`.
+/// A capture's pixels as linear light. `capture` needs `width`, `height`, `pitch`, `format`,
+/// `color_space`, `sdr_white_nits` and `pixels`, like `tuft_imgui.capture.Image`.
 pub fn linearFromCapture(allocator: std.mem.Allocator, capture: anytype) Error!Linear {
     const format = formatOf(capture.format);
     const space = spaceOf(capture.color_space);

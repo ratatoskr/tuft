@@ -1,10 +1,5 @@
-//! Moving things about by dragging them, or from a menu or keys: rows in a list, nested or not,
-//! or tiles along a bar. The view does the moving itself, from `take`. `Arrangement` keeps an
-//! order and what's folded, for views that don't own their order, like lists put together from
-//! other people's. `Outline` draws rows like a tree on top of this.
-//!
-//! Each frame, `begin` before the items, `item` right after each one's widget, then `take` once
-//! they're all drawn.
+//! Reordering rows or bar tiles by drag, menu or keys. The view applies the move from `take`.
+//! Each frame: `begin`, `item` after each widget, then `take`.
 
 const Reorder = @This();
 
@@ -104,15 +99,13 @@ pub fn begin(self: *Reorder) void {
     self.noted = false;
 }
 
-/// Lists one that might not be drawn, like a row scrolled off in a clipped list, so the menu and
-/// keys still move past it. Call for every one, in order, or for none.
+/// Lists an undrawn row so menu and keys move past it. Call for every one, in order, or none.
 pub fn note(self: *Reorder, id: u64, parent: u64) void {
     self.noted = true;
     self.drawn.append(allocator, .{ .id = id, .parent = parent }) catch {};
 }
 
-/// After its widget, ideally one that covers all of it. It drags, takes drops and its right-click
-/// asks for `drawMenu`.
+/// Call after its widget, ideally one covering all of it.
 pub fn item(self: *Reorder, it: Item) void {
     std.debug.assert(it.id != 0);
     if (!self.noted) self.drawn.append(allocator, .{ .id = it.id, .parent = it.parent }) catch {};
@@ -217,8 +210,7 @@ pub fn commands(self: *Reorder, menu: *Commands, id: ?u64, keys: Keys) void {
     }
 }
 
-/// The right-click menu for views without `Commands`. Outside any table, or it can't be clicked.
-/// `extra` has `items(id)`, drawing more above the moves, or is null. True while it's open.
+/// Right-click menu for views without `Commands`, outside tables. `extra` is null or has `items(id)`.
 pub fn drawMenu(self: *Reorder, extra: anytype) bool {
     if (self.menu_asked) |id| {
         self.menu_for = id;
@@ -241,8 +233,7 @@ pub fn take(self: *Reorder) ?Move {
     return self.pending;
 }
 
-/// An order and what's folded, for a view that doesn't own the order of what it shows. Rows
-/// never moved keep their place, after the ones that were.
+/// Saved order and folds for a view that doesn't own its order. Unmoved rows go after moved ones.
 pub const Arrangement = struct {
     order: std.AutoArrayHashMapUnmanaged(u64, void) = .empty,
     folded: std.AutoArrayHashMapUnmanaged(u64, void) = .empty,
@@ -288,7 +279,6 @@ pub const Arrangement = struct {
         self.setFolded(id, !self.isFolded(id));
     }
 
-    /// Clears `changed`.
     pub fn takeChanged(self: *Arrangement) bool {
         defer self.changed = false;
         return self.changed;
@@ -298,8 +288,7 @@ pub const Arrangement = struct {
         return self.order.getIndex(id) orelse std.math.maxInt(usize);
     }
 
-    /// Sorts `items`, which are depth first, so the rows in each group are in the kept order,
-    /// taking what's in them along. `ctx` has `id(*const T) u64` and `depth(*const T) u32`.
+    /// Sorts depth-first `items`. `ctx` has `id(*const T) u64` and `depth(*const T) u32`.
     pub fn arrange(self: *const Arrangement, comptime T: type, items: []T, ctx: anytype) void {
         if (self.order.count() == 0 or items.len < 2) return;
         const scratch = allocator.alloc(T, items.len) catch return;
@@ -355,8 +344,7 @@ pub const Arrangement = struct {
         return null;
     }
 
-    /// Takes a move among rows next to each other in `items`, as arranged. Anything else, like
-    /// into a group, does nothing. True if it moved.
+    /// Only applies moves among siblings. True if it moved.
     pub fn apply(self: *Arrangement, comptime T: type, items: []const T, ctx: anytype, move: Move) bool {
         if (move.place != .before and move.place != .after) return false;
         var from: ?usize = null;

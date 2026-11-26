@@ -1,5 +1,4 @@
-//! Asks before doing something, in a small modal centered on the window that asks, not the screen.
-//! Keep one per question, call `open` when it's time, and `draw` every frame from that window.
+//! Yes/no modal centered on the calling window. One per question: `open`, then `draw` every frame.
 
 const Confirm = @This();
 
@@ -19,8 +18,7 @@ pub fn open(self: *Confirm) void {
     self.asking = true;
 }
 
-/// True the frame it's answered yes. `title` is its ID too, so give it a `##` part if it's not
-/// unique. Call it outside tables, or its buttons can't be clicked.
+/// True the frame it's answered yes. `title` is also its ID. Call outside tables, or buttons can't be clicked.
 pub fn draw(self: *Confirm, title: [:0]const u8, comptime fmt: []const u8, args: anytype, options: Options) bool {
     const name = root.str(title);
     if (self.asking) {

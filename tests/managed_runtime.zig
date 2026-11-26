@@ -152,8 +152,7 @@ test "a real runtime" {
     try testing.expect(classes > 10);
     try testing.expect(methods > classes);
 
-    // Last, since the runtime's gone after. The game closing waits for every thread its runtime
-    // knows, so one of ours that's idle has to have detached
+    // Last, since the runtime's gone after. Game exit waits on every thread the runtime knows, so idle ones must detach
     const Idle = struct {
         fn run(r: *const Runtime, ready: *std.atomic.Value(bool)) void {
             r.detach(r.attach() orelse @panic("can't attach"));
@@ -165,8 +164,7 @@ test "a real runtime" {
     const idle = try std.Thread.spawn(.{}, Idle.run, .{ &rt, &ready });
     idle.detach();
     while (!ready.load(.acquire)) sys.thread.sleepMs(1);
-    // On this thread, which started it, as the game would. If it waits for the idle one, the
-    // watchdog fails the test
+    // On the starting thread, as the game would. The watchdog fails the test if it waits on the idle one
     const Watchdog = struct {
         fn run(done: *std.atomic.Value(bool)) void {
             var waited: u32 = 0;

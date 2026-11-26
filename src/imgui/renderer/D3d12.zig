@@ -17,10 +17,8 @@ const hdr = @import("hdr.zig");
 const capture = @import("../capture.zig");
 
 const max_buffers = 16;
-/// ImGui keeps this many of each frame's vertex buffers, and makes its windows outside the game with
-/// this many buffers. More breaks some games' DXGI, like Visions of Mana's, which won't make the
-/// windows' swap chains then. `render` waits for the GPU to be this close behind, since a game's own
-/// swap chain can have more buffers than this.
+/// Also the viewport swap chains' buffer count; more breaks some games' DXGI, like Visions of Mana's.
+/// `render` waits to stay within it, since the game's swap chain may have more.
 const frames_in_flight = 3;
 const srv_capacity = 64;
 

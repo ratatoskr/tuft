@@ -10,9 +10,8 @@ pub const Options = struct {
     priority: i32 = 0,
 };
 
-/// Events this thread is dispatching, outermost first. Inside one, its list changes can't wait for
-/// dispatches since one is ours. Other events' still do, so cancelling a handler that's running on
-/// another thread waits for it.
+/// Events this thread is dispatching. List changes inside one don't wait on it, since it's ours,
+/// but do wait on other events' handlers running elsewhere.
 const max_nested = 16;
 threadlocal var dispatching: [max_nested]*const anyopaque = undefined;
 threadlocal var dispatch_depth: u32 = 0;

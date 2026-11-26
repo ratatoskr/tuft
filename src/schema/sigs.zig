@@ -1,6 +1,5 @@
-//! What `[Sig("48 8B 05", Offset(3), Rip, Follow, Rel32, FirstMatch, Sources(Live, Disk), Module("x.dll"),
-//! Section(".text"))]` says, as a `mem.Sig`. `Module` and `Section` can also be annotations of their
-//! own. `[VirtualTable]` reads the same way.
+//! What a `[Sig("48 8B 05", Offset(3), Rip, Follow, ...)]` or `[VirtualTable]` annotation says, as a `mem.Sig`.
+//! `Module` and `Section` can also be annotations of their own.
 
 const std = @import("std");
 const mem = @import("tuft_mem");

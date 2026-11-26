@@ -1,6 +1,4 @@
-// The C# tuft loads into a game's CoreCLR to read it, since CoreCLR has no reflection API for
-// native code. reflect.sal says what each call does. Never keeps a type, field or method alive, so
-// a mod loader can still unload what it loaded. Objects are their addresses, see Keep.
+// Loaded into a game's CoreCLR to read it, since CoreCLR has no native reflection API. Keeps nothing alive, so mod loaders can unload.
 
 using System;
 using System.Collections.Generic;
@@ -26,12 +24,9 @@ sealed unsafe class Reflection : IReflector
 {
     const BindingFlags All = BindingFlags.DeclaredOnly | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
 
-    // Mod loaders unload plugins, which frees their types, fields and methods, and the
-    // runtime can put new ones where they were. So nothing here keeps a handle that could be freed
-    // without knowing it's gone, and `changes` goes up when tuft's names for handles could be wrong.
+    // Unloaded types' memory gets reused, so no handle is kept that could go stale. `changes` goes up when tuft's names could be wrong.
 
-    // Goes up when a load context unloads, or a handle comes back meaning something else. Never freed,
-    // since tuft reads it.
+    // Goes up on unload or handle reuse. Never freed, since tuft reads it.
     static readonly int* changes = (int*)NativeMemory.AllocZeroed(sizeof(int));
 
     static void Changed() => Interlocked.Increment(ref *changes);
@@ -49,14 +44,14 @@ sealed unsafe class Reflection : IReflector
         ~Watch() => Changed();
     }
 
-    // Shared by every Reflection, since joining again opens another. Assemblies are ids that are never used again, so an unloaded one's can't come to mean another
+    // Shared, since joining again opens another. Assembly ids are never reused.
     static readonly ConditionalWeakTable<Assembly, Id> assemblyIds = new();
     static readonly Dictionary<nuint, WeakReference<Assembly>> assembliesById = new();
     static nuint lastAssembly;
     static readonly ConditionalWeakTable<AssemblyLoadContext, Watch> watched = new();
-    // Types that can be unloaded, by handle. Kept once they're gone, so a stale handle gives nothing
+    // Collectible types by handle, kept once gone so a stale handle gives nothing
     static readonly Dictionary<nint, WeakReference<Type>> collectible = new();
-    // What declares each field and method, which looking one up by its handle needs for generic types
+    // Each field's and method's declaring type, for looking up generic ones by handle
     static readonly Dictionary<nint, WeakReference<Type>> fieldOwners = new();
     static readonly Dictionary<nint, WeakReference<Type>> methodOwners = new();
     static readonly object gate = new();
@@ -109,7 +104,7 @@ sealed unsafe class Reflection : IReflector
         return (nuint)h;
     }
 
-    // Under gate. A handle whose last one's gone has been reused, so what tuft has for it is wrong.
+    // Under gate. A handle with no live owner was reused, so tuft's name for it is wrong.
     static void Remember(Dictionary<nint, WeakReference<Type>> into, nint h, Type t)
     {
         if (into.TryGetValue(h, out var w))
@@ -136,8 +131,7 @@ sealed unsafe class Reflection : IReflector
     public nuint[] Assemblies()
     {
         var all = AppDomain.CurrentDomain.GetAssemblies().Select(HandleOf).ToArray();
-        // Ids are never reused, and a field or method with no owner gives nothing, so what's gone can
-        // just go. Not collectible types, whose handles would be looked up again if they went.
+        // Ids aren't reused, so what's gone can go. Not non-collectible types, which would be looked up again.
         lock (gate)
         {
             foreach (var (id, w) in assembliesById)
@@ -211,8 +205,7 @@ sealed unsafe class Reflection : IReflector
     {
         if (TypeOf(type) is not { } t || t.IsInterface || t.IsGenericParameter) return 0;
         if (t.IsValueType) return t.ContainsGenericParameters ? 0 : sizeof(nint) + RuntimeHelpers.SizeOf(t.TypeHandle);
-        // A MethodTable starts with its flags then its base size, which counts the header before the
-        // object and the MethodTable pointer at its start. The same since .NET Core 1.
+        // A MethodTable is flags then base size, counting the object header and MethodTable pointer. Same since .NET Core 1.
         var baseSize = *(uint*)((byte*)type + 4);
         return (int)baseSize - sizeof(nint);
     }
@@ -293,8 +286,7 @@ sealed unsafe class Reflection : IReflector
     public nint FieldOffset(nuint field)
     {
         if (FieldOf(field) is not { IsStatic: false }) return -1;
-        // A FieldDesc is its MethodTable pointer, a word of flags, then 27 bits of offset from where
-        // the fields start, right after the object's MethodTable pointer. The same since .NET Core 1.
+        // A FieldDesc: MethodTable pointer, flags word, then a 27-bit offset past the object's MethodTable pointer. Same since .NET Core 1.
         var offset = *(uint*)((byte*)field + sizeof(nint) + 4) & 0x7FFFFFF;
         // The top few are markers for fields that aren't placed yet
         if (offset >= 0x7FFFFFB) return -1;
@@ -306,7 +298,7 @@ sealed unsafe class Reflection : IReflector
         if (FieldOf(field) is not { IsStatic: true, IsLiteral: false } f || f.DeclaringType is not { } owner) return 0;
         if (owner.ContainsGenericParameters || f.IsDefined(typeof(ThreadStaticAttribute), false)) return 0;
         RuntimeHelpers.RunClassConstructor(owner.TypeHandle);
-        // There's no API for where statics are, so this asks the JIT, like C# taking &Type.field would
+        // No API for statics' addresses, so this asks the JIT, like C#'s &Type.field
         var get = new DynamicMethod("", typeof(nuint), Type.EmptyTypes, owner.Module, true);
         var il = get.GetILGenerator();
         il.Emit(OpCodes.Ldsflda, f);

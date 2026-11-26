@@ -1,5 +1,4 @@
-//! Rows for a layout type laid over memory, one per field, element or gap. StructView and
-//! AddressList both build theirs with it.
+//! Rows for a layout type laid over memory, one per field, element or gap.
 
 const StructRows = @This();
 
@@ -68,8 +67,7 @@ pub const Row = struct {
     }
 };
 
-/// Rows opened or closed, against how they start. Keyed by row id, so it lasts while rows are
-/// built again.
+/// Rows toggled from how they start. Keyed by row id, so it survives rebuilds.
 pub const Open = struct {
     toggled: std.AutoHashMapUnmanaged(u64, void) = .empty,
 

@@ -38,14 +38,12 @@ pub const Step = union(enum) {
     rel32,
 };
 
-/// `name` is what the scan gets logged as. Scans every time, keep the result. Tries every copy
-/// the sig allows.
+/// `name` is what the scan gets logged as. Scans every time, so keep the result.
 pub fn locate(self: Sig, name: []const u8) Address {
     return self.locateWith(name, .all);
 }
 
-/// Live memory first, then each copy `allowed` has, unless the sig says which itself. Stops at a
-/// match, or at more than one, since that means it's too loose rather than hooked.
+/// Live memory first, then each allowed copy. Stops at multiple matches too, since that's a loose sig.
 pub fn locateWith(self: Sig, name: []const u8, allowed: Sources) Address {
     const use = self.sources orelse allowed;
     var last: ?Address = null;
@@ -74,8 +72,7 @@ pub fn find(self: Sig, name: []const u8) Address {
     return self.findIn(name, .live);
 }
 
-/// Just the match, before `resolve`, in one copy. The copies only have code, so ones of the whole
-/// image look in `.text` there.
+/// Just the match, before `resolve`, in one copy. Whole-image sigs look in `.text`, copies only have code.
 pub fn findIn(self: Sig, name: []const u8, source: AddressSource) Address {
     const r = (if (source != .live and self.section.len == 0) self.codeRange() else self.range()) catch |err| return failed(name, err);
     var buf: [max_len]?u8 = undefined;

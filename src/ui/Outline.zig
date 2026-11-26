@@ -1,5 +1,4 @@
-//! Rows drawn like a tree, that fold and drag about with a `Reorder`: an address list's groups, a
-//! page's sections and what's in them.
+//! Tree rows that fold and drag with a `Reorder`.
 
 const std = @import("std");
 
@@ -17,9 +16,7 @@ pub const Look = enum {
     heading,
 };
 
-/// The row's label, as a tree node across the whole row so it drags from anywhere other widgets
-/// aren't. In a table, draw what's left of it first and the rest after. `it.open` is what it
-/// shows. True if it was clicked open or shut.
+/// Tree node spanning the row, so it drags from anywhere. True if toggled.
 pub fn node(reorder: *Reorder, it: Reorder.Item, look: Look) bool {
     var flags: c.ImGuiTreeNodeFlags = c.ImGuiTreeNodeFlags_SpanAllColumns | c.ImGuiTreeNodeFlags_AllowOverlap |
         c.ImGuiTreeNodeFlags_FramePadding | c.ImGuiTreeNodeFlags_NoTreePushOnOpen;
@@ -34,8 +31,7 @@ pub fn node(reorder: *Reorder, it: Reorder.Item, look: Look) bool {
     return look != .leaf and open != it.open;
 }
 
-/// Just the arrow, the same as `node`'s, for rows whose label is drawn some other way, like ones
-/// picked with a `Selection`. Put the label after it on the same line. True if it was clicked.
+/// Just `node`'s arrow, for rows whose label is drawn separately. True if clicked.
 pub fn arrow(open: bool) bool {
     raw("ImGui_SetNextItemOpen")(open, c.ImGuiCond_Always);
     const now = raw("ImGui_TreeNodeEx")("##fold", c.ImGuiTreeNodeFlags_NoTreePushOnOpen | c.ImGuiTreeNodeFlags_FramePadding);
@@ -50,8 +46,7 @@ pub fn noArrow() void {
     root.sameLineWith(0, 0);
 }
 
-/// For what an open row shows under it, lined up with its label so it reads as part of it. `end`
-/// it after.
+/// Indents an open row's contents to its label. `end` it after.
 pub fn inside() Inside {
     const by = raw("ImGui_GetTreeNodeToLabelSpacing")();
     raw("ImGui_IndentEx")(by);

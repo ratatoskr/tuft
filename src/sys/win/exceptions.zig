@@ -118,15 +118,14 @@ fn minidumpFn() ?*const win.MiniDumpWriteDumpFn {
     return sys.module.lazyFn("dbghelp.dll", "MiniDumpWriteDump", win.MiniDumpWriteDumpFn);
 }
 
-/// Of this process, stopped at `exception` on thread `thread_id`. From another thread than that one.
-/// It pauses our other threads, so it hangs if one holds a lock it needs. `writeMinidumpOf` from
-/// another process can't.
+/// Dumps this process stopped at `exception` on `thread_id`, from another thread. Hangs if a paused
+/// thread holds a lock it needs; `writeMinidumpOf` from another process avoids that.
 pub fn writeMinidump(path: []const u8, thread_id: u32, exception: ?*const anyopaque) !void {
     return dumpTo(win.GetCurrentProcess(), win.GetCurrentProcessId(), path, thread_id, if (exception) |e| @intFromPtr(e) else 0, false);
 }
 
-/// Of process `process_id`, from outside it. `exception` is the address of its `EXCEPTION_POINTERS`,
-/// 0 for none. Run it from a process of the same arch, or the exception's read with the wrong layout.
+/// Dumps process `process_id` from outside. `exception` is its `EXCEPTION_POINTERS` address, or 0.
+/// Run from the same arch, or the exception is read with the wrong layout.
 pub fn writeMinidumpOf(process_id: u32, path: []const u8, thread_id: u32, exception: usize) !void {
     const process = win.OpenProcess(win.PROCESS_QUERY_INFORMATION | win.PROCESS_VM_READ, .FALSE, process_id) orelse return error.CantOpenProcess;
     defer win.CloseHandle(process);
@@ -150,8 +149,7 @@ fn dumpTo(process: win.HANDLE, process_id: u32, path: []const u8, thread_id: u32
     if (dump(process, process_id, file, kind, if (exception != 0) &info else null, null, null) == .FALSE) return error.DumpFailed;
 }
 
-/// Runs `command_line` and waits up to `timeout_ms` for its exit code, killing it if it's longer.
-/// No allocation, so it's fine mid-crash.
+/// Runs `command_line`, waiting up to `timeout_ms` for its exit code before killing it. No allocation, so safe mid-crash.
 pub fn runAndWait(command_line: []const u8, timeout_ms: u32) !u32 {
     const S = struct {
         var wide: [4096:0]u16 = undefined;

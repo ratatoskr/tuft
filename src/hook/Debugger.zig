@@ -17,10 +17,9 @@ const CpuContext = arch.CpuContext;
 const Exception = exceptions.Exception;
 
 pub const Kind = enum {
-    /// A debug register, shared with memory watches. Only four, but the code stays as it is.
+    /// A debug register, shared with memory watches. Only four, but the code stays untouched.
     hardware,
-    /// An `int3` written over the code's first byte. As many as you like, but the code's changed
-    /// while it's on, which a game checking its own code can see.
+    /// An `int3` over the code's first byte. Unlimited, but visible to games checking their code.
     software,
 };
 
@@ -109,8 +108,8 @@ const Record = struct {
     // Changed by the thread changing breakpoints
     kind: Kind = .hardware,
     slot: ?watch.Slot = null,
-    /// For `software`, it holds the byte so hooks and patches keep off it. The int3 itself is
-    /// written by hand, since that happens inside exceptions too, which mustn't allocate.
+    /// For `software`, keeps hooks and patches off the byte. The int3 is written by hand since
+    /// exceptions rewrite it too and mustn't allocate.
     patch: ?*Patch = null,
     /// The byte the int3 replaced.
     original: u8 = 0,
@@ -437,9 +436,7 @@ pub const SetCpuError = error{
     Unreadable,
 };
 
-/// Changes a stopped thread's registers, without running anything. They go into the thread when it's
-/// resumed, however that is, and `paused` shows them till then. Like a debugger's register window, it's
-/// on you that they make sense.
+/// Changes a stopped thread's registers, applied on resume and shown in `paused` till then.
 pub fn setCpu(self: *Debugger, id: u32, cpu: CpuContext) SetCpuError!void {
     if (!sys.memory.isReadable(cpu.ip(), 1)) return error.Unreadable;
     for (&self.slots) |*slot| {
@@ -454,8 +451,7 @@ pub fn setCpu(self: *Debugger, id: u32, cpu: CpuContext) SetCpuError!void {
     return error.NotStopped;
 }
 
-/// Moves a stopped thread to `address`, like Visual Studio's set next statement. The stack and the
-/// other registers stay as they are.
+/// Moves a stopped thread to `address`, like set next statement. The stack is left as is.
 pub fn setIp(self: *Debugger, id: u32, address: usize) SetCpuError!void {
     var threads: [max_paused]Paused = undefined;
     for (threads[0..self.paused(&threads)]) |p| {
@@ -538,8 +534,7 @@ fn onException(self: *Debugger, e: *Exception) ?exceptions.Action {
 
     if (stop) |s| if (s != .none and self.mayStop()) {
         _ = self.pause(e, s, reason, null);
-        // It stopped here already, so an int3 of ours here mustn't stop it again.
-        // Without a stop the int3 runs and counts as a hit as usual
+        // It stopped here already, so our int3 here only counts a hit
         self.stepPastInt3(e);
     };
 
@@ -551,8 +546,7 @@ fn onException(self: *Debugger, e: *Exception) ?exceptions.Action {
     return if (e.debug.status & 0xF != 0) null else .handled;
 }
 
-/// A trap flag step. Windows only gives a thread's debug registers when it has some set, so without
-/// them, no breakpoint bits means it's the trap flag.
+/// A trap flag step. Windows omits debug registers when none are set, so no bits means trap flag.
 fn isTrace(e: *const Exception) bool {
     return e.debug.status & step_bit != 0 or e.debug.status & 0xF == 0;
 }
@@ -616,8 +610,7 @@ fn rearm(self: *Debugger) void {
     sys.memory.writeCode(rearm_at, &.{int3}) catch {};
 }
 
-/// This process's memory, but our int3s read as the bytes they replaced. A write under one changes the
-/// byte it puts back and keeps the int3.
+/// This process's memory with our int3s read as the original bytes. Writes under one keep the int3.
 pub fn memory(self: *Debugger) Memory {
     return .{ .context = self, .vtable = &memory_vtable };
 }
@@ -746,7 +739,7 @@ fn mayStop(self: *const Debugger) bool {
 }
 
 /// Waits inside the exception until told to go. No allocating or logging, it could hold any lock.
-/// Null if it was let go without being told, like when the UI stalls or the debugger closes.
+/// Null if let go untold, like when the UI stalls or the debugger closes.
 fn pause(self: *Debugger, e: *Exception, stop: Stop, reason: Reason, crash: ?Crash) ?Command {
     _ = self.waiting.fetchAdd(1, .acq_rel);
     defer _ = self.waiting.fetchSub(1, .acq_rel);
@@ -796,8 +789,7 @@ fn pause(self: *Debugger, e: *Exception, stop: Stop, reason: Reason, crash: ?Cra
         slot.lock.unlockShared();
     }
     if (command == .step_over) command = if (reason != .crash and self.placeStepOver(e, stop)) .run else .step;
-    // Counted as stepping before it stops being stopped, so a freeze never lifts in between.
-    // A crash can't step, it'd only fault again
+    // Counted as stepping before unstopping so a freeze never lifts between. Crashes can't step
     if (command == .step and reason != .crash and !self.closing.load(.acquire)) {
         _ = self.stepping.fetchAdd(1, .acq_rel);
         if (stop == .all) _ = self.stepping_all.fetchAdd(1, .acq_rel);
@@ -821,9 +813,8 @@ pub fn canStopCrash(self: *const Debugger) bool {
     return self.started and self.mayStop();
 }
 
-/// For a crash's last-chance handler, on the crashing thread. Stops it with everything else frozen till
-/// the UI says. `e` comes back changed for `skip`. A crash that can't stop, or that the UI let go
-/// of by stalling, should crash.
+/// For a crash's last-chance handler, on the crashing thread. Stops it with everything frozen till the
+/// UI says. `e` comes back changed for `skip`. Crash if it can't stop or the UI stalled.
 pub fn stopCrash(self: *Debugger, e: *Exception) Verdict {
     if (!self.started or !self.mayStop()) return .crash;
     const command = self.pause(e, .all, .crash, .{ .code = e.code, .kind = e.kind, .fault = e.fault }) orelse return .crash;

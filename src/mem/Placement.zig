@@ -1,14 +1,5 @@
-//! Where code we put in a game goes, and the data it reads. Hooks, patches that don't fit in
-//! place and plain allocations all come through here, so code always lands in reach of its data.
-//!
-//! Best first:
-//! - `near`, a page a `jmp rel32` from the target reaches
-//! - `cave`, padding in the target's module, writable while it's ours
-//! - `far`, the module's far zone, jumped to through a 14-byte cave relay if there's one
-//! - `anywhere`, jumped to absolutely
-//!
-//! Pages get shared, so data placed first leaves room beside it for the code that reads it. Data
-//! and the code that reads it can also go in as one group, see `placeGroup`.
+//! Where code we put in a game goes, and the data it reads, so code always lands in reach of its data.
+//! Tiers, best first: `near` page, `cave` padding, `far` zone via a cave relay, `anywhere`.
 
 const Placement = @This();
 
@@ -43,11 +34,9 @@ pub const Request = struct {
     data_align: usize = 16,
     /// Data placed before that the code reads, so it has to be in reach of it.
     reach: []const usize = &.{},
-    /// More code near and cave spots have to reach, like other jumps to it or patches in place
-    /// that read its data.
+    /// More code near and cave spots have to reach, like other jumps to it or in place readers.
     points: []const usize = &.{},
-    /// Code all over the target's module reads its data, so near spots try to reach all of it
-    /// first. Always so for data on its own.
+    /// Near spots try to reach the whole module first, since code all over it reads the data.
     wide: bool = false,
     /// Whether the target jumps to the code. Slot stubs don't.
     jump: bool = true,
@@ -101,10 +90,8 @@ pub fn groupSize(parts: []const Part) usize {
     return at;
 }
 
-/// Puts all of `group`'s parts side by side in one spot, so they all reach each other, with a
-/// Placement each in `out`. Data parts get `data`, code parts `code` and a jump from their target.
-/// Each one frees on its own, and the spot goes with the last. `error.OutOfReach` if no tier has
-/// room for all of it.
+/// Puts all of `group`'s parts side by side in one spot, a Placement each in `out`. Each frees on
+/// its own, and the spot goes with the last.
 pub fn placeGroup(group: Group, out: []Placement) !void {
     std.debug.assert(out.len == group.parts.len);
     if (group.parts.len == 0) return;
@@ -209,8 +196,7 @@ pub fn jumpLen(self: *const Placement) u8 {
     return if (self.jump == .absolute) arch.abs_jmp_len else arch.near_jmp_len;
 }
 
-/// Puts the relay cave back. Takes no locks, so it's fine with threads frozen. False if it
-/// couldn't.
+/// Puts the relay cave back. Takes no locks, so it's fine with threads frozen.
 pub fn unlink(self: *Placement) bool {
     if (!self.linked) return true;
     self.linked = false;

@@ -35,8 +35,7 @@ pub const swapPointer = sys_memory.swapPointer;
 pub const Protection = sys_memory.Protection;
 /// Returns the first page's old protection.
 pub const protect = sys_memory.protect;
-/// First committed region at or after an address, readable or not. `Memory.regionFrom` skips
-/// unreadable ones.
+/// First committed region at or after an address, readable or not.
 pub const committedFrom = sys_memory.committedFrom;
 pub const findCodeCave = @import("caves.zig").findCodeCave;
 
@@ -46,8 +45,7 @@ pub const Address = plain.Address;
 pub const Module = plain.Module;
 pub const Range = plain.Range;
 
-/// Addresses that can hook themselves through `Hooks`, like `tuft_hook.memory`. Only these
-/// depend on `Hooks`, so the rest comes from `tuft_mem` itself.
+/// Addresses that can hook themselves through `Hooks`, like `tuft_hook.memory`.
 pub fn With(comptime Hooks: type) type {
     return struct {
         pub const Address = @import("Address.zig").Generic(Hooks);

@@ -1,6 +1,5 @@
-//! Starts a game's Mono or IL2CPP in this process without the game, to read its C# outside it. Only
-//! the runtime starts, so nothing that needs the engine works, but reflection and plain C# do. Can't
-//! be undone, and only one runtime fits in a process. Games with Denuvo kill the process.
+//! Starts a game's Mono or IL2CPP here without the game, to read its C#. No engine, but reflection works.
+//! Can't be undone, one runtime per process, and games with Denuvo kill the process.
 
 const std = @import("std");
 const sys = @import("tuft_sys");

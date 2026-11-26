@@ -86,8 +86,7 @@ buttons: u8 = 0,
 // Render thread only
 hovering: bool = false,
 
-/// Becomes ImGui's platform backend for the current context. `icon` is an icon resource in this
-/// module, for its windows. Render thread.
+/// Becomes the current context's platform backend. `icon` is a resource in this module. Render thread.
 pub fn create(allocator: std.mem.Allocator, main: tuft_window.Handle, sink: Sink, icon: ?[]const u8) !*Win32 {
     const user32 = win.GetModuleHandleW(std.unicode.utf8ToUtf16LeStringLiteral("user32.dll")) orelse return error.User32NotLoaded;
     const def_window_proc = win.GetProcAddress(user32, "DefWindowProcW") orelse return error.DefWindowProcNotFound;
@@ -538,8 +537,7 @@ const ViewportData = struct {
             // Needed after a style change
             if (have.visible) _ = win.ShowWindow(hwnd, win.SW_SHOWNA);
         }
-        // Our windows aren't owned by the game's, so a topmost game would cover a dragged one.
-        // Raise it above the game on every update while dragging.
+        // Unowned by the game's window, so raise above a topmost game while dragging
         const dragging = want.no_inputs and want.ex_style & win.WS_EX_TOPMOST == 0;
         if (data.raised_topmost and !dragging) {
             _ = win.SetWindowPos(hwnd, @ptrFromInt(@as(usize, @bitCast(win.HWND_NOTOPMOST))), 0, 0, 0, 0, win.SWP_NOMOVE | win.SWP_NOSIZE | win.SWP_NOACTIVATE);
@@ -573,8 +571,7 @@ const ViewportData = struct {
             if (detach) _ = win.SetWindowLongPtrW(hwnd, win.GWLP_HWNDPARENT, @bitCast(@intFromPtr(have.parent.?)));
             have.visible = true;
         }
-        // After showing, since a window dragged off is shown without a move.
-        // Topmost since plain HWND_TOP doesn't stick against some games.
+        // After showing, since a dragged-off window shows without a move. HWND_TOP doesn't stick in some games
         if (dragging and have.visible) {
             _ = win.SetWindowPos(hwnd, @ptrFromInt(@as(usize, @bitCast(win.HWND_TOPMOST))), 0, 0, 0, 0, win.SWP_NOMOVE | win.SWP_NOSIZE | win.SWP_NOACTIVATE);
             data.raised_topmost = true;

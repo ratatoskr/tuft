@@ -18,8 +18,7 @@ fn listDrivers(allocator: std.mem.Allocator, first_size: usize) ![]const []const
         for (names.items) |n| allocator.free(n);
         names.deinit(allocator);
     }
-    // In chunks, picking up where the last one stopped. The size it says it needs is only for
-    // what's left and can be short, so asking for it all at once can go round forever.
+    // In chunks, resuming where the last stopped. The size it reports can be short, so asking for it all at once can loop forever
     var resume_at: win.DWORD = 0;
     for (0..4096) |_| {
         var needed: win.DWORD = 0;

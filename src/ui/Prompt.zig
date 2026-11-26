@@ -1,5 +1,4 @@
-//! A box to type code or commands into, like a REPL's. Enter runs it, Shift+Enter adds a line,
-//! and Up and Down go back through what ran before, from its first or last line.
+//! REPL-style input. Enter runs, Shift+Enter adds a line, Up/Down browse history from the first/last line.
 
 const Prompt = @This();
 
@@ -26,8 +25,7 @@ at: ?usize = null,
 draft: std.ArrayList(u8) = .empty,
 /// What `draw` gave back last.
 entered: std.ArrayList(u8) = .empty,
-/// Where the cursor was last frame, so Up and Down only go through history from the first or
-/// last line.
+/// Last frame's cursor, so Up/Down only browse history from the first or last line.
 cursor: usize = 0,
 submit: bool = false,
 refocus: bool = false,

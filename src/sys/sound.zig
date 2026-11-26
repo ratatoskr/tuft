@@ -1,5 +1,4 @@
-//! Plays WAV sounds through the system, one at a time like it does, on a thread of its own so
-//! asking never stalls the caller, even on a game's render thread.
+//! Plays WAV sounds one at a time on a thread of its own, so it never stalls the caller.
 
 const std = @import("std");
 const native = @import("win/sound.zig");

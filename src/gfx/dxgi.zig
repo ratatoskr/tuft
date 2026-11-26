@@ -400,9 +400,8 @@ pub const PresentHook = struct {
         slot.* = .{ .swap_chain = swap_chain, .color_space = color_space };
     }
 
-    /// What the game set, else what its plugin says, else SDR. Only 16-bit float means HDR on its
-    /// own, since plenty of games, like Unreal ones, draw SDR into 10 bits. A game using HDR10 that
-    /// we joined late shows as SDR till it sets its colour space again or its plugin says.
+    /// What the game set, else what its plugin says, else SDR. Only FP16 implies HDR, since many games
+    /// draw SDR into 10 bits. HDR10 joined late shows as SDR till the game sets its color space again.
     fn colorSpaceOf(self: *PresentHook, swap_chain: *SwapChain) gfx.ColorSpace {
         var desc: SwapChainDesc = .{};
         if (!com.succeeded(swap_chain.getDesc(&desc))) return .srgb;

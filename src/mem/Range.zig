@@ -41,8 +41,7 @@ pub fn Generic(comptime Hooks: type) type {
             return addr >= self.start and addr - self.start < self.len;
         }
 
-        /// Scans another copy of the code, so code that's hooked now is still found. What's found
-        /// is where it is in live memory. Local memory only.
+        /// Scans another copy of the code so hooked code is still found, at its live address. Local only.
         pub fn from(self: Range, source: AddressSource) Range {
             var copy = self;
             copy.source = source;
@@ -168,8 +167,7 @@ pub fn Generic(comptime Hooks: type) type {
             return null;
         }
 
-        /// A chunk that didn't read whole, a page at a time. Modules can have pages that can't be
-        /// read, and a match can't be in one anyway.
+        /// A chunk that didn't read whole, a page at a time, skipping unreadable pages.
         fn findInPages(self: Range, buf: *[chunk_len]u8, at: usize, n: usize, p: Pattern, any: *bool) ?usize {
             var readable: ?usize = null;
             var off: usize = 0;

@@ -90,8 +90,7 @@ pub fn isKeyHidden(self: *const Blocker, key: @import("root.zig").Key) bool {
     return self.backend.isKeyHidden(key);
 }
 
-/// Presses of these buttons are hidden from the game from now on, each till it's let go, while the
-/// rest of the mouse stays the game's. A bit per `MouseButton`. Any thread.
+/// Hides presses of these `MouseButton` bits from the game, each till released. Any thread.
 pub fn consumeButtons(self: *Blocker, buttons: u8) void {
     self.consume_buttons.store(buttons, .release);
 }

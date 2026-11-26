@@ -1,6 +1,5 @@
 //! Who stuff belongs to, like a plugin or script. Systems clean up on its lifecycle.
-//! It has a Salamander owner too, which tables made for it check before every call. Closing this
-//! closes and drains that, so calls through them stop before anything else lets go.
+//! Closing it also closes and drains its Salamander owner, so calls through its tables stop first.
 
 const Owner = @This();
 
@@ -110,8 +109,7 @@ pub fn isOpen(self: *Owner) bool {
     return self.state == .open;
 }
 
-/// Its Salamander owner, for tables made for it. It's the host's, so it outlives this, and tables
-/// pointing at it stay safe to call. Null once it's closed, or out of memory.
+/// Its Salamander owner, for tables made for it. Host-owned, so it outlives this. Null once closed or on OOM.
 pub fn salamander(self: *Owner) ?*rt.Owner {
     self.sal_lock.lock();
     defer self.sal_lock.unlock();
@@ -128,8 +126,7 @@ pub fn salamanderMade(self: *Owner) ?*rt.Owner {
     return self.sal;
 }
 
-/// Waits for in-flight registrations first, then for calls through its Salamander tables. Never from
-/// inside one of those calls. Fine to call twice.
+/// Waits for in-flight registrations, then for calls through its Salamander tables. Never from inside one. Fine twice.
 pub fn close(self: *Owner) void {
     if (!self.advance(.closed)) return;
     if (self.salamanderMade()) |s| s.drain();

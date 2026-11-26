@@ -3,8 +3,7 @@
 const std = @import("std");
 const sys = @import("tuft_sys");
 
-/// Where exports come from. Usually a loaded module, but a game that renames them can map names
-/// itself, and tests hand in fakes.
+/// Where exports come from: usually a loaded module, but games that rename them, or tests, can map names.
 pub const Resolver = struct {
     ctx: ?*anyopaque,
     find: *const fn (ctx: ?*anyopaque, name: [:0]const u8) ?usize,

@@ -223,9 +223,8 @@ pub const Mismatch = struct {
     }
 };
 
-/// Whether `code`, at `address`, is `expected`, like `cmp ecx, eax; cmovl ax, cx`. Both get
-/// disassembled to compare, so any encoding of the same instructions matches. Their length if so,
-/// else null with `mismatch` saying what's there.
+/// Whether `code` at `address` disassembles to `expected`, like `cmp ecx, eax; cmovl ax, cx`, in any encoding.
+/// Returns its length, or null with `mismatch` saying what's there.
 pub fn expectAt(gpa: std.mem.Allocator, expected: []const u8, code: []const u8, address: usize, resolver: ?Resolver, diagnostic: ?*Diagnostic, mismatch: *Mismatch) Error!?usize {
     var block: Block = .init(gpa);
     defer block.deinit();

@@ -21,8 +21,7 @@ pub const CpuContext = extern struct {
     ecx: u32,
     eax: u32,
     eflags: u32,
-    /// Where it runs next. A mid hook can change it to carry on somewhere else instead of the original code.
-    /// The mid stub's return slot.
+    /// Where it runs next; a mid hook can change it. The mid stub's return slot.
     eip: u32,
 
     // zig fmt: off

@@ -133,8 +133,7 @@ fn fillBlock(raw: []u8, linear: Linear, first: u32, lines: u32) void {
     }
 }
 
-/// What EXR's ZIP does before deflating: even bytes then odd ones, each stored as the difference
-/// from the one before plus 128.
+/// EXR's ZIP predictor: even bytes then odd, each stored as the delta from the previous plus 128.
 fn predict(raw: []const u8, out: []u8) void {
     const half = (raw.len + 1) / 2;
     for (raw, 0..) |byte, i| out[if (i % 2 == 0) i / 2 else half + i / 2] = byte;

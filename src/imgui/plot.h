@@ -15,8 +15,7 @@ typedef struct ImPlot_Point {
     double y;
 } ImPlot_Point;
 
-// Returned instead of ImVec2 and ImVec4. Those are C++ classes in plot.cpp, and MSVC returns
-// classes with constructors through a hidden pointer, which C callers don't pass
+// Returned instead of ImVec2/ImVec4, which MSVC returns through a hidden pointer C callers don't pass
 typedef struct ImPlot_Vec2 {
     float x;
     float y;

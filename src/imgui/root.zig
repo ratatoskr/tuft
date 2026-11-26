@@ -137,8 +137,7 @@ extern fn tuft_imgui_dock_of(name: [*:0]const u8) c.ImGuiID;
 extern fn tuft_imgui_dock_central(id: c.ImGuiID) c.ImGuiID;
 
 pub const FontOptions = struct {
-    /// Leaves U+E000 to U+F8FF to a font merged in later, like icons. Some text fonts put their own
-    /// glyphs there, and the first font with a glyph wins.
+    /// Leaves U+E000-U+F8FF to a later merged icon font, since the first font with a glyph wins.
     skip_private_use: bool = false,
 };
 
@@ -152,8 +151,7 @@ pub const MergeOptions = struct {
     offset_y: f32 = 0,
 };
 
-/// Adds `data`'s glyphs to `into`, where it has none of its own, like an icon font. Same lifetime
-/// as `addFont`.
+/// Merges `data`'s glyphs into `into` where it has none. Same lifetime as `addFont`.
 pub fn mergeFont(data: []const u8, size: f32, into: *c.ImFont, name: [:0]const u8, options: MergeOptions) bool {
     return tuft_imgui_merge_font(data.ptr, @intCast(data.len), size, into, name.ptr, options.offset_y);
 }

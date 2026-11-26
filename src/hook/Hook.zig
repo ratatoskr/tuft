@@ -70,15 +70,13 @@ timing: Timing = .{},
 owner: ?*const Owner = null,
 /// Runs code of its own instead of a stub, see `createInjectRaw`.
 injected: bool = false,
-/// Just after the targeted instructions, running any others the jump covered first. The first
-/// instruction, or what `replace` covers.
+/// Just after the targeted instructions, running any others the jump covered first.
 resume_addr: usize = 0,
 /// A mid hook replacing code, so its callback carries on at `resume_addr`, not the original.
 mid_resumes: bool = false,
 
 pub const MidOptions = struct {
-    /// Bytes at the target the callback replaces, ending between instructions. Returning without
-    /// setting the ip carries on after them. 0 runs the instruction there after it instead.
+    /// Bytes the callback replaces, ending between instructions. 0 runs the original instruction after.
     replace: u8 = 0,
 };
 
@@ -119,8 +117,8 @@ pub fn createFn(
     return TypedHook(T).fromHook(hook);
 }
 
-/// The detour must call `current()` before anything that could enter a hook,
-/// then wrap its work in `enterCall`/`leaveCall`, passing through to `trampoline_addr` when told no.
+/// The detour must call `current()` before anything that could enter a hook, then wrap its work
+/// in `enterCall`/`leaveCall`, passing through to `trampoline_addr` when told no.
 pub fn createFnRaw(target_addr: usize, detour: usize, user_data: usize) !*Hook {
     log.debug("Creating fn hook for target 0x{x}", .{target_addr});
     const hook = try create(target_addr, thunk.fn_stub_size, user_data, 0);
@@ -181,12 +179,11 @@ pub fn current() *Hook {
 pub const InjectSite = struct {
     /// Where the code starts.
     code: usize,
-    /// Runs the targeted instructions as they were, then carries on. Null when the code's going
-    /// in place, where there's no copy of them.
+    /// Runs the targeted instructions as they were, then carries on. Null when built in place.
     original: ?usize,
     /// Just after the targeted instructions, running any others the jump covered first.
     resume_at: usize,
-    /// Only sizing it up somewhere like where it'll go. It gets built again for real.
+    /// Only a trial build for sizing. It gets built again for real.
     trial: bool = false,
 };
 
@@ -197,14 +194,11 @@ pub const InjectBuild = struct {
 };
 
 pub const InjectOptions = struct {
-    /// Bytes at the target the code replaces, ending between instructions. Running off the end of
-    /// the code carries on after them. 0 puts the code before the instruction there, and running
-    /// off the end runs it.
+    /// Bytes the code replaces, ending between instructions. 0 puts the code before the instruction.
     replace: u8 = 0,
     /// Data placed before that the code reads, so the code goes in reach of it.
     reach: []const usize = &.{},
-    /// Where `Placement.placeGroup` already put it, with room from `injectRoom`. Its trampoline
-    /// goes first. The hook has it even if making the hook fails.
+    /// Already placed by `Placement.placeGroup` with `injectRoom`. Owned by the hook even on failure.
     place: ?Placement = null,
 };
 
@@ -213,8 +207,7 @@ pub fn injectRoom(target_addr: usize, code: InjectBuild, options: InjectOptions)
     return trampolineRoom(target_addr, options.replace) + measureInject(target_addr, code, options);
 }
 
-/// Room for the relocated instructions, built as if far from where they came from, where they
-/// grow the most. So whatever `Placement` picks, they fit.
+/// Room for the relocated instructions, sized as if placed far away where they grow the most.
 fn trampolineRoom(target_addr: usize, replace: u8) usize {
     var scratch: [512]u8 = undefined;
     const far_away = if (arch.near_reaches_all) target_addr else target_addr ^ (@as(usize, 1) << 44);
@@ -226,8 +219,7 @@ fn trampolineRoom(target_addr: usize, replace: u8) usize {
     return scratch.len;
 }
 
-/// Code the target jumps to. It either goes before the instruction there or replaces
-/// `options.replace` bytes, see `InjectOptions`. Calls aren't counted, so `destroy` only waits for
+/// Code the target jumps to, see `InjectOptions`. Calls aren't counted, so `destroy` only waits for
 /// threads to leave it.
 pub fn createInjectRaw(target_addr: usize, code: InjectBuild, options: InjectOptions) !*Hook {
     log.debug("Creating inject hook for target 0x{x}", .{target_addr});
@@ -277,8 +269,7 @@ pub fn createInjectRaw(target_addr: usize, code: InjectBuild, options: InjectOpt
     return hook;
 }
 
-/// Room for the code, from a trial build next to its data or else the target. A page's worth if
-/// that doesn't build.
+/// Room for the code from a trial build near its data or target. A page if that doesn't build.
 fn measureInject(target_addr: usize, code: InjectBuild, options: InjectOptions) usize {
     const page_room = memory.pages.size / 2;
     var scratch: [2048]u8 = undefined;
@@ -322,8 +313,7 @@ pub fn enable(self: *Hook) !void {
         log.debug("Enabled slot hook for 0x{x}", .{self.target_addr});
         return;
     }
-    // Nothing that could take a lock while threads are frozen, like logging or allocating. Page
-    // protection too, which some games hook with a lock of their own
+    // Nothing that could take a lock while frozen: no logging, allocating or page protection (games hook it)
     {
         const unlocked = try memory.unlockCode(self.target_addr, self.patch_len);
         defer unlocked.lock();
@@ -513,8 +503,8 @@ fn prepare(self: *Hook, target_addr: usize, stub_size: usize, place: Placement, 
     self.stub_len = stub_len;
 }
 
-/// Builds the trampoline at `tramp_base` and a patch that jumps to `entry`. Covers at least
-/// `replace` bytes, which have to end between instructions. Only owns `placed` on success.
+/// Builds the trampoline at `tramp_base` and a patch to `entry`, covering at least `replace` bytes,
+/// ending between instructions. Only owns `placed` on success.
 fn prepareAt(self: *Hook, target_addr: usize, placed: Placement, entry: usize, tramp_base: usize, tramp_buf: []u8, replace: u8) !void {
     var place = placed;
     const mode = modeOf(&place);

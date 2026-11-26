@@ -71,9 +71,8 @@ pub fn HookSet(comptime F: type) type {
             return false;
         }
 
-        /// Enables the disabled ones. If something else hooked a target since its hook was made,
-        /// like an overlay hooking the same DLL as it loads, the hook gets made again over theirs,
-        /// so ours runs first and then theirs. A few tries, since they might still be writing.
+        /// Enables the disabled ones. Targets hooked by someone else since get rehooked over theirs.
+        /// Retries a few times, since they might still be writing.
         pub fn enable(self: *Self) !void {
             for (0..self.len) |i| try self.enableAt(i);
         }

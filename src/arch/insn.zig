@@ -187,8 +187,7 @@ fn described(d: *Decoded, instruction: usize) !DecodedInsn {
     return out;
 }
 
-/// Where an instruction's operand values sit and where it goes next, for signatures that leave
-/// out what changes between builds.
+/// Where an instruction's operands and next address sit, for signatures that mask build-specific bytes.
 pub const Layout = struct {
     len: u8,
     /// The displacement and immediates, in no particular order.

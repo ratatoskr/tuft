@@ -1,8 +1,6 @@
 //! Text for where something is, like `game.exe+0x10`, `[player.base]+8`, `kernel32.dll!Sleep`,
-//! `Game.Player:Update+0x3a`, `"odd-name.dll"+0x10` or `sig("48 8B 05 ??", Rip)`. Numbers are
-//! decimal unless they start with 0x or end in h, like `0FFh`. Names go to `Symbols`, and `(name)` is
-//! the same as `name`.
-//! Math is `+ - * / %`, with `* / %` first, wrapping like pointer math.
+//! `Game.Player:Update+0x3a` or `sig("48 8B 05 ??", Rip)`. Numbers are decimal unless 0x or `0FFh`.
+//! Math is `+ - * / %`, wrapping like pointer math.
 
 const std = @import("std");
 
@@ -17,8 +15,7 @@ pub const Env = struct {
     memory: ?Memory = null,
     /// Looked up before `symbols`, like a tweak's own names.
     scope: Symbols = .none,
-    /// What text starting with + or - is relative to, like a group's address. Without it a
-    /// leading - is just negative.
+    /// What text starting with + or - is relative to. Without it a leading - is just negative.
     base: ?usize = null,
 };
 
@@ -216,8 +213,7 @@ const Parser = struct {
         return self.fail(miss.err, "{s}: {s}", .{ n, miss.message });
     }
 
-    /// `sig("48 8B ??", Rip, Follow, Rel32, Offset(n), Module("x.dll"), Section(".data"))`. The whole
-    /// image without a `Section`.
+    /// `sig("48 8B ??", Rip, Follow, Rel32, Offset(n), Module("x.dll"), Section(".data"))`.
     fn sig(self: *Parser, start: usize) Error!usize {
         try self.expect('(');
         var s: Sig = .{ .pattern = try self.string(), .section = "" };

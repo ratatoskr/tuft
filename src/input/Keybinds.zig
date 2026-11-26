@@ -31,8 +31,7 @@ pub const Action = struct {
     consume: bool = true,
     /// Also matches while ImGui takes text input.
     while_typing: bool = false,
-    /// A key that's held, like one to move with: it fires whatever modifiers are down too, and its
-    /// key can be a modifier itself, like Shift. Its keys have no modifiers.
+    /// A held key, like for moving: ignores modifiers and can be one itself, like Shift.
     held: bool = false,
 };
 

@@ -55,8 +55,7 @@ pub const FileDialog = struct {
 
     mode: Mode,
     owner: ?Handle = null,
-    /// A window of another thread, like a game's, to show it over. Unlike `owner` it doesn't tie
-    /// the dialog to that thread, which would make it as slow as that thread's message loop.
+    /// Another thread's window to show over, like the game's. Unlike `owner`, doesn't tie the dialog to its slow message loop.
     over: ?Handle = null,
     title: []const u8 = "",
     /// Where it starts. Empty is the system's pick.
@@ -67,8 +66,7 @@ pub const FileDialog = struct {
     kind: []const u8 = "",
     /// Like ".rwp". Added when a name's typed without it.
     extension: []const u8 = "",
-    /// Called about twice a second from another thread, while `owner`'s thread still answers messages.
-    /// For watchdogs that'd otherwise think a thread sitting in the dialog had hung.
+    /// Called about twice a second from another thread while the dialog is open, to keep hang watchdogs quiet.
     alive: ?Alive = null,
 
     pub const Alive = struct {
@@ -77,8 +75,7 @@ pub const FileDialog = struct {
     };
 };
 
-/// A native open or save dialog. Blocks the calling thread until it's done. Null if cancelled.
-/// The caller frees the path.
+/// A native open or save dialog. Blocks until done. Null if cancelled; the caller frees the path.
 pub const pickFile = native.pickFile;
 
 pub const FolderDialog = struct {
@@ -92,12 +89,10 @@ pub const FolderDialog = struct {
     alive: ?FileDialog.Alive = null,
 };
 
-/// Whether `window` is one of a dialog `pickFile` or `pickFolder` is showing right now, for focus
-/// hooks that keep the game thinking it's active while one of our windows is. Any thread.
+/// Whether `window` belongs to a dialog `pickFile` or `pickFolder` is showing now, for focus hooks. Any thread.
 pub const ownsDialog = native.ownsDialog;
 
-/// A native dialog for picking a folder. Blocks the calling thread until it's done. Null if cancelled.
-/// The caller frees the path.
+/// A native folder picker. Blocks until done. Null if cancelled; the caller frees the path.
 pub const pickFolder = native.pickFolder;
 
 test {

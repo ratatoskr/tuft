@@ -39,8 +39,7 @@ static void onShutdown(ImGuiContext*, ImGuiContextHook* hook) {
     ImPlot::DestroyContext(static_cast<ImPlotContext*>(hook->UserData));
 }
 
-// Points GImPlot at the current ImGui context's ImPlot context, making it the first time.
-// Its hook frees it with the ImGui one.
+// Points GImPlot at the current ImGui context's ImPlot context, made on first use and freed with it.
 static void use() {
     ImGuiContext* g = ImGui::GetCurrentContext();
     if (g == nullptr) {

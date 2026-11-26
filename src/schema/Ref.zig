@@ -105,8 +105,7 @@ pub fn field(self: Ref, name: []const u8) Ref {
     }
 }
 
-/// A `T[count]` array is as long as `count` says now, read from the struct at `base`. Anything
-/// else is as it's written. One whose count can't be read is empty.
+/// A `T[count]` field is as long as `count` reads now from `base`, or empty if unreadable.
 pub fn sizedField(schema: *const Schema, in: *const Schema.Type, f: Schema.Field, memory: Memory, base: usize) Type {
     if (f.type != .array) return f.type;
     const a = f.type.array;

@@ -1,5 +1,4 @@
-//! Polls controllers from every source on its own thread and reports what changed. XInput is the
-//! only source for now. Others, like Steam Input, plug in as more `Source`s.
+//! Polls controllers from every source on its own thread and reports changes. Only XInput so far.
 
 const Gamepads = @This();
 
@@ -124,8 +123,7 @@ fn run(self: *Gamepads) void {
     }
 }
 
-/// Polls every source and fires `changed` if anything did. The poll thread does this on its own,
-/// so only call it without one.
+/// Polls every source and fires `changed` if anything did. Only for when there's no poll thread.
 pub fn pollNow(self: *Gamepads) void {
     // Our own XInput hooks would hide the controllers from us otherwise
     const bypass = Blocker.Bypass.begin();

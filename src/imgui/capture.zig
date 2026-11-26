@@ -1,5 +1,4 @@
-//! Copies of the game's frame, from right before ImGui draws into it and right after.
-//! Backends copy on the GPU and hand the pixels over a frame or so later, so nothing waits.
+//! Copies of the game's frame from before and after ImGui draws. Pixels arrive a frame or so later.
 
 const std = @import("std");
 

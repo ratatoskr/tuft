@@ -1,5 +1,4 @@
-//! Data and the code that reads it, placed as one so the code always reaches it. Patches that fit
-//! go in place. The data and the rest share one spot from `Placement.placeGroup`.
+//! Data and the code that reads it, placed together so the code can always reach it.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -18,8 +17,7 @@ pub const Data = struct {
 pub const Code = struct {
     address: usize,
     build: Hook.InjectBuild,
-    /// Replaces code there like `Patch.replace`. Null goes before the instruction there, like
-    /// `Hook.createInjectRaw`.
+    /// Replaces code like `Patch.replace`. Null injects before it, like `Hook.createInjectRaw`.
     replace: ?Patch.ReplaceOptions = null,
 };
 
@@ -40,9 +38,8 @@ pub const Failure = struct {
     bytes: usize = 0,
 };
 
-/// Places `data` and `code` together, and makes the code, starting disabled. Builds see each
-/// `data_out` empty till it's placed, which is before anything's built for real, so trials
-/// before that should put the data right by the code. Nothing's left placed if it fails.
+/// Places `data` and `code` together, code starting disabled. Nothing stays placed on failure.
+/// Trial builds see `data_out` empty, so they should assume the data is right by the code.
 pub fn place(data: []const Data, code: []const Code, options: Options, data_out: []Placement, code_out: []Made, failure: *Failure) !void {
     std.debug.assert(data_out.len == data.len and code_out.len == code.len);
     const gpa = registry.allocator();
@@ -69,8 +66,7 @@ pub fn place(data: []const Data, code: []const Code, options: Options, data_out:
         if (outside[i] and sizes[i] > arch.relocate.max_stolen_bytes) return error.TooLong;
     }
 
-    // In place ones might not reach data that only had room far away. Those move out and it's
-    // all placed again
+    // In place code may not reach data placed far away, so it moves out and all is placed again
     var count: usize = 0;
     while (true) {
         count = data.len;
@@ -183,8 +179,7 @@ const tests = struct {
     extern fn tuft_batch_a(a: u32, b: u32) callconv(.c) u32;
     extern fn tuft_batch_b(a: u32, b: u32) callconv(.c) u32;
 
-    /// `mov eax, [rip+data]` and then some, reading `data_out[0]` plus `offset`. Right by the code
-    /// till it's placed.
+    /// `mov eax, [rip+data]` reading `data_out[0]` plus `offset`.
     const ReadData = struct {
         data: []const Placement,
         offset: usize = 0,

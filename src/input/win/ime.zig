@@ -1,6 +1,5 @@
-//! Lets our text boxes use the IME in games that switch it off, and puts its windows at the caret.
-//! While we've switched it on, the game's own `ImmAssociateContext` calls wait till we let go, like
-//! `ClipCursor` does while the mouse is ours.
+//! Lets our text boxes use the IME in games that disable it, and puts its windows at the caret.
+//! While we hold it, the game's `ImmAssociateContext` calls are deferred till we let go.
 
 const Ime = @This();
 
@@ -57,9 +56,8 @@ pub fn create(allocator: std.mem.Allocator, window: *Window) !*Ime {
     return self;
 }
 
-/// Gives the game its IME back. Best done with `setTyping(false)` a frame before, since this
-/// may not be on the window's thread and Windows may refuse. Waits a bit for a queued update, and
-/// leaks itself if that never runs rather than leave it pointing at freed memory.
+/// Gives the game its IME back. Best after `setTyping(false)` a frame earlier, since Windows may refuse
+/// off the window thread. Leaks itself if a queued update never runs, rather than dangle.
 pub fn destroy(self: *Ime) void {
     if (self.imm_wait) |w| w.destroy();
     if (self.queued.load(.acquire)) {
@@ -153,8 +151,7 @@ fn letGo(self: *Ime) void {
     }
 }
 
-/// Puts the composition and candidate windows at the caret. On the thread that made `hwnd`, since
-/// IMM won't do it from any other.
+/// Puts the composition and candidate windows at the caret. Only works on `hwnd`'s thread.
 pub fn placeOn(hwnd: win.HWND, p: Placement) void {
     const himc = win.ImmGetContext(hwnd) orelse return;
     defer _ = win.ImmReleaseContext(hwnd, himc);

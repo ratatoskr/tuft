@@ -1,5 +1,4 @@
-//! Copies of code as it was before any hooks: a snapshot taken early, and the module's file on disk.
-//! One provider per copy per DLL.
+//! Copies of code from before any hooks: an early snapshot and the file on disk. One provider per copy per DLL.
 
 const std = @import("std");
 
@@ -114,8 +113,7 @@ pub fn earliest(start: usize, len: usize) ?[]const u8 {
     return find(.snapshot, start, len) orelse find(.disk, start, len);
 }
 
-/// `source`'s copy as read-only memory, for views. What it has no copy of can't be read. Null for
-/// live memory, which is whatever `Memory` the view had.
+/// `source`'s copy as read-only memory, for views. Null for live memory.
 pub fn memory(source: AddressSource) ?Memory {
     return switch (source) {
         .live => null,

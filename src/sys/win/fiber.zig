@@ -1,5 +1,5 @@
-//! Windows fibers. They swap the stack bounds the OS keeps per thread, so stack probes and exceptions work on
-//! them. A fiber can be resumed on any thread, one at a time.
+//! Windows fibers. They swap the OS's per-thread stack bounds, so stack probes and exceptions work.
+//! A fiber can resume on any thread, one at a time.
 
 const std = @import("std");
 const builtin = @import("builtin");

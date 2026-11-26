@@ -1,9 +1,5 @@
-//! Mono and IL2CPP, the runtimes Unity and some other games run C# on, and CoreCLR, .NET's own. Calls
-//! the game's own runtime to list assemblies, classes, fields and methods, get method addresses, and
-//! read strings. Same calls for all of them, though CoreCLR only reads so far, see `coreclr.zig`.
-//!
-//! Any thread calling in has to `attach` first, or the runtime can crash. The game must have started
-//! its runtime too, so check `started` before anything else.
+//! Reflection over a game's C# runtime: Mono, IL2CPP, and CoreCLR (read-only so far, see `coreclr.zig`).
+//! Threads must `attach` before calling in, and check `started` first.
 
 const std = @import("std");
 const sys = @import("tuft_sys");
@@ -31,8 +27,7 @@ pub const ElementType = h.ElementType;
 
 pub const Kind = enum { il2cpp, mono, coreclr };
 
-/// Arrays under Mono and IL2CPP start with the object header, then where their bounds are and their
-/// length, each a pointer wide. CoreCLR's are shorter, see `Runtime.arrayItems`.
+/// Where Mono and IL2CPP array items start: after the object header, bounds and length. CoreCLR differs.
 pub const array_items_offset = 4 * @sizeOf(usize);
 
 /// What each runtime's DLL is usually called.
@@ -46,8 +41,7 @@ pub const Runtime = union(Kind) {
     mono: Mono,
     coreclr: CoreClr,
 
-    /// The runtime loaded in this process, IL2CPP first. Null if neither is loaded. `missing` gets
-    /// the export it couldn't find, if one wasn't there. Not CoreCLR, which `CoreClr.open` joins.
+    /// The loaded IL2CPP or Mono runtime, or null. `missing` gets any absent export.
     pub fn find(missing: ?*[]const u8) error{MissingExport}!?Runtime {
         for (il2cpp_modules) |name| if (sys.module.findBase(name)) |base| return try fromModule(.il2cpp, base, missing);
         for (mono_modules) |name| if (sys.module.findBase(name)) |base| return try fromModule(.mono, base, missing);
@@ -70,8 +64,7 @@ pub const Runtime = union(Kind) {
         };
     }
 
-    /// True once the game's started the runtime and loaded its core library. Safe from any thread at
-    /// any time, so check this before `domain` or `attach`, which IL2CPP can crash on before then.
+    /// True once the runtime and core library are up. Safe from any thread; check before `domain` or `attach`.
     pub fn started(self: *const Runtime) bool {
         return switch (self.*) {
             inline else => |*r| r.started(),
@@ -92,8 +85,7 @@ pub const Runtime = union(Kind) {
         };
     }
 
-    /// Only for threads we attached and own, before they exit. Detach ones that wait between calls
-    /// too, since the game waits for every attached thread as it closes.
+    /// For threads we own, before they exit. Detach idle ones too: the game waits on attached threads at exit.
     pub fn detach(self: *const Runtime, t: *Thread) void {
         switch (self.*) {
             inline else => |*r| r.detach(t),
@@ -120,8 +112,7 @@ pub const Runtime = union(Kind) {
         });
     }
 
-    /// The loaded image called `name`, like `Assembly-CSharp.dll`. Mono leaves `.dll` off and IL2CPP
-    /// doesn't, so it can be either.
+    /// The loaded image called `name`, with or without `.dll` (Mono omits it).
     pub fn findImage(self: *const Runtime, allocator: std.mem.Allocator, name: []const u8) !?*Image {
         const list = try self.assemblies(allocator);
         defer allocator.free(list);
@@ -237,8 +228,7 @@ pub const Runtime = union(Kind) {
         });
     }
 
-    /// From the start of the object, header and all, even in value types. From the class's static
-    /// data for static fields.
+    /// From the object start, header included even for value types. From static data for statics.
     pub fn fieldOffset(self: *const Runtime, f: *Field) usize {
         return switch (self.*) {
             inline else => |*r| r.fieldOffset(f),
@@ -273,31 +263,28 @@ pub const Runtime = union(Kind) {
         };
     }
 
-    /// Copies a static field's value into `out`, which has to be big enough for its type. May run
-    /// the class's static constructor. False if it couldn't.
+    /// Copies a static field's value into `out`. May run the static constructor. False on failure.
     pub fn staticValue(self: *const Runtime, f: *Field, out: *anyopaque) bool {
         return switch (self.*) {
             inline else => |*r| r.staticValue(f, out),
         };
     }
 
-    /// Where the class keeps its static fields, to add their offsets to. May run its static
-    /// constructor. Null under IL2CPP before Unity 2019 or so, which doesn't export it.
+    /// The class's static field block. May run its static constructor. Null on IL2CPP before ~Unity 2019.
     pub fn staticData(self: *const Runtime, c: *Class) ?usize {
         return switch (self.*) {
             inline else => |*r| r.staticData(c),
         };
     }
 
-    /// Copies an instance field's value into `out`, which has to be big enough for its type. A
-    /// reference comes out as the object's pointer.
+    /// Copies an instance field's value into `out`. References come out as the object pointer.
     pub fn fieldValue(self: *const Runtime, o: *Object, f: *Field, out: *anyopaque) void {
         switch (self.*) {
             inline else => |*r| r.fieldValue(o, f, out),
         }
     }
 
-    /// Sets an instance field, through the runtime so the garbage collector hears about references.
+    /// Sets an instance field via the runtime so the GC sees references.
     /// `value` points at the value for value types, and is the object itself for references.
     pub fn setFieldValue(self: *const Runtime, o: *Object, f: *Field, value: ?*anyopaque) void {
         switch (self.*) {
@@ -384,15 +371,13 @@ pub const Runtime = union(Kind) {
         return self.methodFlags(m) & h.method_static != 0;
     }
 
-    /// Its native code, to hook or call. Mono compiles it first if it has to. Null if it has none,
-    /// like an abstract method.
+    /// Its native code, to hook or call. Mono compiles it if needed. Null if none, like abstract methods.
     pub fn methodPointer(self: *const Runtime, m: *Method) ?usize {
         return switch (self.*) {
             inline else => |*r| r.methodPointer(m),
         };
     }
 
-    /// From the header at the start of every object.
     pub fn objectClass(self: *const Runtime, o: *Object) ?*Class {
         return switch (self.*) {
             inline else => |*r| r.objectClass(o),
@@ -406,16 +391,15 @@ pub const Runtime = union(Kind) {
         };
     }
 
-    /// An object of `c`, zeroed and not constructed, so call its `.ctor` next. The garbage collector
-    /// owns it, so keep a handle to hold on to it. CoreCLR's can move, so construct it straight
-    /// away there, or `invoke` a constructor with no `this`, which makes and constructs it at once.
+    /// A zeroed, unconstructed object of `c`: call its `.ctor` next and hold a handle to keep it.
+    /// CoreCLR's can move, so construct it at once, or `invoke` a constructor with no `this`.
     pub fn newObject(self: *const Runtime, c: *Class) ?*Object {
         return switch (self.*) {
             inline else => |*r| r.newObject(c),
         };
     }
 
-    /// From UTF-8. The runtime's garbage collector owns it, so keep a handle to hold on to it.
+    /// From UTF-8. GC-owned, so hold a handle to keep it.
     pub fn newString(self: *const Runtime, text: [*:0]const u8) ?*String {
         return switch (self.*) {
             inline else => |*r| r.newString(text),
@@ -433,9 +417,9 @@ pub const Runtime = union(Kind) {
         return std.unicode.wtf16LeToWtf8Alloc(allocator, self.stringChars(s));
     }
 
-    /// Runs the game's C#. `this` is null for static methods, and the unboxed value for value types.
-    /// `args` holds a pointer to each value-type argument, and objects as they are. Value-type
-    /// results come back boxed. If it throws, `exception` gets it and this returns null.
+    /// Runs the game's C#. `this` is null for statics and the unboxed value for value types.
+    /// `args` holds pointers to value-type args and objects as-is. Value results come boxed.
+    /// If it throws, `exception` gets it and this returns null.
     pub fn invoke(self: *const Runtime, m: *Method, this: ?*anyopaque, args: ?[*]const ?*anyopaque, exception: ?*?*Object) ?*Object {
         return switch (self.*) {
             inline else => |*r| r.invoke(m, this, args, exception),
@@ -468,11 +452,8 @@ pub const Runtime = union(Kind) {
         };
     }
 
-    /// The native function behind a C# `extern` method, like Unity's engine calls, by its class's
-    /// full name and its own. Things like `Transform.position` are these, and they're the same
-    /// functions under both runtimes. Null if there's no such call. Looks in every image for the
-    /// class, so give `allocator` for the list of them. Mono complains on its console about ones
-    /// that aren't there.
+    /// The native function behind a C# `extern` method, like `Transform.position`, by class full name.
+    /// Null if none. Mono logs missing ones to its console.
     pub fn icall(self: *const Runtime, allocator: std.mem.Allocator, class_name: []const u8, method: []const u8) !?usize {
         // IL2CPP finds them by name, usually without the signature
         if (self.* == .il2cpp) {
@@ -523,14 +504,14 @@ pub const Runtime = union(Kind) {
         return null;
     }
 
-    /// The `System.Type` for `t`, like `typeof` gives, for C# that takes one. The runtime keeps it.
+    /// The `System.Type` for `t`, like `typeof`. The runtime owns it.
     pub fn typeObject(self: *const Runtime, t: *Type) ?*Object {
         return switch (self.*) {
             inline else => |*r| r.typeObject(t),
         };
     }
 
-    /// A `T[]` of `element`, all zeroes. The garbage collector owns it, so keep a handle to hold on.
+    /// A zeroed `T[]` of `element`. GC-owned, so hold a handle to keep it.
     pub fn newArray(self: *const Runtime, element: *Class, length: usize) ?*Object {
         return switch (self.*) {
             inline else => |*r| r.newArray(element, length),
@@ -555,8 +536,7 @@ pub const Runtime = union(Kind) {
         };
     }
 
-    /// Goes up whenever what was found before could be gone, like a method's code once a mod loader
-    /// unloads its plugin. Only CoreCLR's changes.
+    /// Bumps when earlier lookups may be stale, like after a plugin unload. Only CoreCLR's changes.
     pub fn changes(self: *const Runtime) u32 {
         return switch (self.*) {
             .coreclr => |*r| r.changes(),

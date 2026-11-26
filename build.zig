@@ -3,13 +3,10 @@ const salamander_build = @import("salamander");
 
 const Import = std.Build.Module.Import;
 
-/// Where the built helper `tuft_managed` loads into a game's CoreCLR is kept, one per pointer size.
-/// Built from `src/managed/coreclr` and the C# salamander makes from `reflect.sal`, by `zig build
-/// coreclr`, so nothing else building tuft needs the dotnet SDK.
+/// Prebuilt CoreCLR helpers, one per pointer size, so building tuft needs no dotnet SDK.
 const helper_dir = "src/managed/coreclr/bin";
 
-/// `zig build coreclr` writes the helpers into `helper_dir`, and `coreclr-check` fails if they're
-/// not what it would write. Both need the dotnet SDK, found only when they run.
+/// `coreclr` rebuilds the helpers into `helper_dir`; `coreclr-check` fails if they're stale. Both need dotnet.
 fn coreclrSteps(b: *std.Build, salamander: *std.Build.Dependency) void {
     const dotnet = b.findProgramLazy(.{ .names = &.{"dotnet"} });
     const update = b.addUpdateSourceFiles();
@@ -66,8 +63,7 @@ pub fn build(b: *std.Build) void {
 
     if (!supported(b, target)) return;
 
-    // The layer under tuft: runtime calls, fibers and owners. The same options as anyone above us
-    // passes, so a build shares one.
+    // Same options as callers pass, so a build shares one salamander
     const salamander = b.dependency("salamander", .{ .target = target, .optimize = optimize });
     const zydis_t = zydis.cApi(b, target, optimize);
 

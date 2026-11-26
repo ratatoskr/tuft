@@ -13,9 +13,7 @@ pub const allocNearSpan = sys.memory.allocNearSpan;
 pub const allocAny = sys.memory.allocAny;
 pub const free = sys.memory.free;
 
-/// For when nothing near `target` is free, like an exe with a fixed base low in memory that the
-/// game's heaps grew all around. Everything that asks for far pages for the same module lands
-/// in one zone, within reach of each other, so a hook's code still reaches data put there.
+/// For when nothing near `target` is free. Far pages for one module share a zone, so they reach each other.
 pub fn allocFar(target: usize, len: usize) !Slice {
     if (arch.near_reaches_all) return allocAny(len);
     const key = zoneKey(target);

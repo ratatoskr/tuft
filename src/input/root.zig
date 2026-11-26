@@ -352,9 +352,8 @@ pub const Chord = struct {
     }
 };
 
-/// Up to `max` chords that all do the same, like a key and a controller button. The first is
-/// `key` and `mods`, so one chord written down, like `.{ .key = .f8 }` or a saved one, is a `Keys`
-/// with just it.
+/// Up to `max` chords that do the same, like a key and a pad button. The first is `key` and `mods`,
+/// so a single chord like `.{ .key = .f8 }` is a `Keys` too.
 pub const Keys = struct {
     key: Key,
     mods: Mods = .{},

@@ -21,7 +21,7 @@ var active: std.atomic.Value(?*Event) = .init(null);
 /// Routes that might still be reading `active`. `deinit` waits them out before freeing it.
 var in_flight: std.atomic.Value(u32) = .init(0);
 var init_lock: sys.sync.RwLock = .{};
-/// `init`s not `deinit`ed yet.
+/// Outstanding `init`s.
 var users: u32 = 0;
 
 /// Each `init` needs a `deinit`. Subscriptions use the first caller's allocator.

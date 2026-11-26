@@ -1,11 +1,5 @@
-//! RGBA8 pixels ImGui can draw, in whichever contexts draw them. Each context gets its own
-//! `ImTextureData` the first time it draws it, and the backend uploads it from there, so it works
-//! the same on every graphics API.
-//!
-//! `destroy` is fine from any thread. Each context then lets its copy go at the start of its next
-//! frame. It asks the backend to destroy it, which can take a frame, then unregisters and frees it.
-//! A context that shuts down first lets all of its copies go right away. The pixels are freed once
-//! no context has a copy left.
+//! RGBA8 pixels drawable in any context; each context uploads its own copy on first draw.
+//! `destroy` is fine from any thread; pixels are freed once no context holds a copy.
 
 const Texture = @This();
 
@@ -74,8 +68,7 @@ pub fn size(self: *const Texture) ui.Vec2 {
     return .{ @floatFromInt(self.width), @floatFromInt(self.height) };
 }
 
-/// For `ImGui_Image` and co in the current context, this frame. Null without a context, or if its
-/// renderer can't take textures. Render thread.
+/// For `ImGui_Image` in the current context, this frame. Null if unsupported. Render thread.
 pub fn ref(self: *Texture) ?c.ImTextureRef {
     const context = c.ImGui_GetCurrentContext() orelse return null;
     if (!hasTextures()) return null;

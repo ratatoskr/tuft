@@ -209,8 +209,7 @@ test "stop viewports midway" {
 
 const capture = @import("capture.zig");
 
-/// GPU copies land a frame or so later, but CI's software renderer can take a lot longer.
-/// So wait up to 5s, not a set number of frames.
+/// Waits up to 5s, since CI's software renderer can be far slower than a frame.
 const max_wait_frames = 500;
 
 fn waitFrame(game: *Game) void {

@@ -106,8 +106,7 @@ pub fn focus(self: *AsmView) void {
     self.take_focus = true;
 }
 
-/// Where it's scrolled to and what's picked, to keep another view in step. Not how long the picked
-/// instructions are, since another copy of the code might decode them differently.
+/// Where it's scrolled to and what's picked, to keep another view in step. Not lengths, copies may differ.
 pub const Place = struct {
     top: usize,
     frac: f32,

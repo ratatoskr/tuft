@@ -26,8 +26,7 @@ pub fn Generic(comptime Hooks: type) type {
 
         state: State,
         memory: Memory = .local,
-        /// Which copy of the code it was worked out from. `rip`, `follow` and `rel32` read code
-        /// from that copy, since live code there might be hooked. Everything else reads `memory`.
+        /// Copy of the code it came from. `rip`, `follow` and `rel32` read it, since live code may be hooked.
         source: AddressSource = .live,
 
         pub fn at(addr: usize) Self {
@@ -124,8 +123,7 @@ pub fn Generic(comptime Hooks: type) type {
             return self.moved(insn.resolveControlFlowTargetOf(&code, a));
         }
 
-        /// Where the 32-bit relative offset here points, from just past it. For when the
-        /// instruction it's in starts before what was matched.
+        /// Where the rel32 here points, from just past it. For instructions starting before the match.
         pub fn rel32(self: Self) Self {
             const a = self.unwrap() catch return self;
             var bytes: [4]u8 = undefined;

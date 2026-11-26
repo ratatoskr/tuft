@@ -15,8 +15,7 @@ pub const RelocateResult = struct {
     stolen_len: u8,
     trampoline_len: u16,
     original_bytes: [max_stolen_bytes]u8,
-    /// Where the instruction that starts `n` bytes in lands in the trampoline. At `stolen_len`
-    /// it's the jump back. Null inside an instruction.
+    /// Trampoline offset per source byte offset (`stolen_len` is the jump back). Null mid-instruction.
     starts: [max_stolen_bytes + 1]?u16 = @splat(null),
 
     /// The trampoline offset just after the first `n` bytes. Null if that's inside an instruction.
@@ -261,9 +260,8 @@ fn writeFarRipOperand(out: *Emitter, d: insn.DecodedInsn, bytes: []const u8, tar
     try out.write(&[_]u8{0x58 + scratch});
 }
 
-/// x64 only. RAX, RCX, RDX or RBX, skipping any the instruction uses. `vvvv` is a VEX or EVEX
-/// operand register, which can be a general one, like BMI's. Unused, it reads as RAX, which is
-/// skipped all the same, as there's no telling.
+/// x64 only. RAX, RCX, RDX or RBX, skipping any the instruction uses, including `vvvv`.
+/// An unused `vvvv` reads as RAX, which is skipped anyway.
 fn pickScratch(d: insn.DecodedInsn, vvvv: ?u4) ?u8 {
     var used = [4]bool{ false, false, false, false };
     if (vvvv) |v| if (v < 4) {
@@ -366,16 +364,14 @@ const tests = struct {
     test "far RIP-relative 2-byte VEX goes through a scratch register" {
         if (!is64) return error.SkipZigTest;
         var buf: [64]u8 = undefined;
-        // vmovss xmm0, [rip+0x10], as the game's slow rate update opens with. RAX shares xmm0's
-        // number, so it's skipped
+        // vmovss xmm0, [rip+0x10]. RAX shares xmm0's number, so it's skipped
         try expectThrough(1, &.{ 0xC5, 0xFA, 0x10, 0x01 }, try rewrite(&.{ 0xC5, 0xFA, 0x10, 0x05, 0x10, 0, 0, 0 }, &buf));
     }
 
     test "far RIP-relative 3-byte VEX clears its inverted B" {
         if (!is64) return error.SkipZigTest;
         var buf: [64]u8 = undefined;
-        // vmovaps xmm1, [rip+0x10] with B set, which RIP-relative ignores but [rdx] wouldn't. An
-        // unused vvvv reads as RAX, so that's skipped too
+        // vmovaps xmm1, [rip+0x10] with B set, ignored by RIP-relative but not [rdx]. Unused vvvv skips RAX
         try expectThrough(2, &.{ 0xC4, 0xE1, 0x78, 0x28, 0x0A }, try rewrite(&.{ 0xC4, 0xC1, 0x78, 0x28, 0x0D, 0x10, 0, 0, 0 }, &buf));
     }
 

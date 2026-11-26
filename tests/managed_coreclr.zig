@@ -151,8 +151,7 @@ test "reads a CoreCLR" {
     try unloads(rt, corlib);
 }
 
-/// What a mod loader does to a plugin it reloads. What was found in it gives nothing
-/// once it's gone, rather than reading memory the runtime freed.
+/// What a mod loader does to a plugin it reloads. Lookups into it then give nothing, not freed memory.
 fn unloads(rt: managed.Runtime, corlib: *managed.Image) !void {
     const a = testing.allocator;
     const ours = (try rt.findImage(a, "Tuft.CoreClr.dll")) orelse return error.NoHelper;

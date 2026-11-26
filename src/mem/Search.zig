@@ -187,8 +187,7 @@ pub fn next(self: *Search, compare: Compare, text: []const u8) Error!void {
     return self.narrow(Test{ .compare = compare, .kind = kind, .wanted = wanted }, Test.keep);
 }
 
-/// Like `next` with your own test of each hit's value now and before. Kept values become the next
-/// baseline.
+/// Like `next` with your own test of each hit's value now and before.
 pub fn narrow(self: *Search, context: anytype, comptime keep: fn (@TypeOf(context), now: []const u8, before: []const u8) bool) Error!void {
     if (self.kind == null) return error.NothingSearched;
     self.cancelled.store(false, .monotonic);

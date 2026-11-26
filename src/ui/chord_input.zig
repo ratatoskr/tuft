@@ -30,8 +30,7 @@ fn sync() void {
     last_frame = -10;
 }
 
-/// Click it, then press the keys. Escape or clicking elsewhere cancels. True when `chord` changed.
-/// While it listens the host's keybinds are paused, so it can take keys they use.
+/// True when `chord` changed. Pauses host keybinds while listening.
 pub fn chordInput(label: [:0]const u8, chord: *?input.Chord, options: Options) bool {
     sync();
     const id = raw("ImGui_GetID")(root.str(label));

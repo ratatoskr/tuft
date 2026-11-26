@@ -1,6 +1,5 @@
-//! Folder listings with virtual files mixed in. Real entries come first, then virtual ones.
-//! A virtual file hides a real one with the same name. Only listings that finish right away
-//! get merged, which is how `FindFirstFile` and friends do it.
+//! Folder listings with virtual files merged in after real ones, shadowing same-named real files.
+//! Only listings that finish right away are merged, which is how `FindFirstFile` and friends work.
 
 const std = @import("std");
 

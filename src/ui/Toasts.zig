@@ -1,5 +1,4 @@
-//! Little popups stacked in a screen corner that fade away. Push from any thread, `draw` once a frame.
-//! Hovering one keeps it up, clicking it closes it.
+//! Fading popups stacked in a screen corner. Push from any thread, `draw` once a frame.
 
 const Toasts = @This();
 
@@ -38,7 +37,7 @@ pub const Options = struct {
     margin: root.Vec2 = .{ 16, 16 },
     /// Unscaled.
     width: f32 = 320,
-    /// `focused` follows whichever ImGui platform window was used last, for apps whose main one is hidden.
+    /// `focused` follows the last used platform window, for apps whose main one is hidden.
     viewport: enum { main, focused } = .main,
 };
 

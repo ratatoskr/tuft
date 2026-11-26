@@ -131,9 +131,8 @@ pub fn hideMessage(self: *Win32, m: *const tuft_window.Message) ?isize {
     return tuft_window.defaultProc(m);
 }
 
-/// Window thread, for a message hidden from the game. Alt+F4 still closes it, like `DefWindowProc` would.
-/// IME messages go to `DefWindowProc` instead, so the IME keeps working for us and its text comes
-/// back as chars.
+/// Window thread, for a message hidden from the game. Alt+F4 still closes it.
+/// IME messages go to `DefWindowProc` so the IME keeps working and its text comes back as chars.
 pub fn swallowed(_: *Win32, m: *const tuft_window.Message) isize {
     if (@import("input.zig").isIme(m.msg)) return tuft_window.defaultProc(m);
     const alt_held = m.lparam & (1 << 29) != 0;

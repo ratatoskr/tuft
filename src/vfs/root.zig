@@ -1,10 +1,7 @@
 //! Sees every file the process opens, reads, writes and closes, and serves in-memory files.
 //! Listeners run on the thread doing the I/O, so they can change or refuse it.
-//!
-//! Paths are WTF-8 with forward slashes, like `C:/Game/data.pak` or `//server/share/a`.
-//! Devices and pipes keep their NT names, like `/Device/Afd/Endpoint`. Input can use either slash.
-//! Handles opened before `init` aren't tracked. Neither are threads in `ignoreThread`
-//! or listeners' own file I/O, which goes straight to the system.
+//! Paths are WTF-8 with forward slashes; devices and pipes keep NT names. Input takes either slash.
+//! Handles opened before `init` aren't tracked, nor ignored threads or listeners' own I/O.
 
 const Vfs = @This();
 

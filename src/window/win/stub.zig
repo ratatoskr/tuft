@@ -6,8 +6,7 @@ pub const Slot = enum(usize) { handler, context, original, forward, active };
 
 const Template = struct { start: *const anyopaque, slots: *const anyopaque, end: *const anyopaque };
 
-// Each starts aligned like its slots, so where the slots are in a copy doesn't depend on where the
-// template landed.
+// Each starts aligned like its slots, so slot offsets in a copy don't depend on where the template landed.
 
 pub const template: Template = switch (builtin.cpu.arch) {
     .x86_64 => .{ .start = &x64.tuft_wndproc_x64_start, .slots = &x64.tuft_wndproc_x64_slots, .end = &x64.tuft_wndproc_x64_end },

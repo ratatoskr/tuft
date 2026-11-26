@@ -59,8 +59,7 @@ pub fn pickFolder(gpa: std.mem.Allocator, options: window.FolderDialog) !?[]u8 {
     return dialog.show(gpa, options.owner, options.over, options.alive);
 }
 
-/// COM on the dialog's thread, which the shell's dialogs need. Fine if it's already set up there,
-/// and a thread set up for free threading still works.
+/// COM on the dialog's thread, which shell dialogs need. Fine if already set up there, even free-threaded.
 const Com = struct {
     ok: bool,
 
@@ -152,8 +151,7 @@ const DialogThreads = struct {
     }
 };
 
-/// A hidden topmost window of this thread, covering `over`, to own a dialog. The dialog then opens
-/// centered over `over` and in front of it, without waiting on `over`'s thread.
+/// A hidden topmost window covering `over`, to own a dialog so it opens in front without waiting on `over`'s thread.
 const StandIn = struct {
     fn over(target: ?Handle) ?Handle {
         const t = target orelse return null;
@@ -255,8 +253,8 @@ pub fn bringToFront(hwnd: Handle) bool {
     const me = win.GetCurrentThreadId();
     const fg = win.GetForegroundWindow();
     const front = if (fg) |f| win.GetWindowThreadProcessId(f, null) else 0;
-    // Sharing input with a thread that isn't pumping, like one stopped in a debugger, makes the focus
-    // change below wait on it forever. Without sharing, its deactivation just queues up for it
+    // Sharing input with a thread that isn't pumping, like one in a debugger, makes the focus change
+    // below hang. Unshared, its deactivation just queues
     const borrow = front != 0 and front != me and responds(fg.?);
     if (borrow) _ = win.AttachThreadInput(me, front, .TRUE);
     defer if (borrow) {

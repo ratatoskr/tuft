@@ -216,8 +216,7 @@ pub const Il2Cpp = struct {
         self.api.field_set_value(o, f, value);
     }
 
-    /// Runs the class's static constructor first if it hasn't, since its statics aren't there till
-    /// then. Null in older Unity, which doesn't export it.
+    /// Runs the static constructor first if needed, since statics don't exist till then. Null in older Unity.
     pub fn staticData(self: *const Il2Cpp, c: *Class) ?usize {
         const get = self.api.class_get_static_field_data orelse return null;
         if (self.api.runtime_class_init) |init_class| init_class(c);
@@ -260,8 +259,7 @@ pub const Il2Cpp = struct {
         return self.api.method_get_flags(m, null);
     }
 
-    /// The native code's first in every MethodInfo since IL2CPP began. Null for abstract methods and
-    /// generics nothing ever made.
+    /// Native code is first in every MethodInfo. Null for abstract methods and generics never instantiated.
     pub fn methodPointer(_: *const Il2Cpp, m: *Method) ?usize {
         const first: *const usize = @ptrCast(@alignCast(m));
         return if (first.* == 0) null else first.*;

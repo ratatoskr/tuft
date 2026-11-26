@@ -1,6 +1,5 @@
-//! A module's code as its file on disk has it, laid out where it's loaded, with its relocations
-//! done for where it is. For finding code that was hooked before any snapshot was taken. Reading the
-//! file is up to the caller, so this does no I/O.
+//! A module's code from its file on disk, laid out and relocated as loaded. For code hooked before
+//! any snapshot. Does no I/O, the caller reads the file.
 
 const DiskImage = @This();
 
@@ -28,8 +27,7 @@ const reloc_dir = 5;
 const rel_highlow = 3;
 const rel_dir64 = 10;
 
-/// `file` is the module's file, loaded at `base`. Only its code sections are kept, the same ones
-/// `CodeSnapshot` copies.
+/// `file` is the module's file, loaded at `base`. Keeps the same code sections `CodeSnapshot` copies.
 pub fn fromFile(allocator: std.mem.Allocator, file: []const u8, base: usize) Error!DiskImage {
     var self: DiskImage = .{ .allocator = allocator };
     errdefer self.deinit();
@@ -94,8 +92,7 @@ fn provide(start: usize, len: usize) ?[*]const u8 {
     return image.find(start, len);
 }
 
-/// Absolute addresses in the code were written for the image's preferred base, so they move by
-/// however far it is from where it loaded.
+/// Moves absolute addresses from the preferred base to where it loaded.
 fn relocate(self: *DiskImage, file: []const u8, pe: Headers, base: usize) void {
     const delta = base -% pe.image_base;
     if (delta == 0) return;

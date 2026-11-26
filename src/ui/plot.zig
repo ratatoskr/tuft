@@ -277,8 +277,7 @@ pub const PlotOptions = struct {
     flags: Flags = .{},
 };
 
-/// Null when it's off screen. Set it up, then plot things, then `end`.
-/// The title shows unless it starts with `##`, and must be unique in the window.
+/// Null when off screen. Title must be unique in the window; `##` hides it.
 pub fn chart(title: [:0]const u8, options: PlotOptions) ?Chart {
     if (!raw("ImPlot_BeginPlot")(str(title), vec2(options.size), @bitCast(options.flags))) return null;
     return .{};

@@ -27,8 +27,7 @@ pub const Options = struct {
     setup: ?Setup = null,
     /// Gets frame captures, on the render thread.
     capture_sink: ?capture.Sink = null,
-    /// Switches the IME on for text boxes in the game's window and places it. Null leaves the IME
-    /// as the game set it.
+    /// Drives the IME for text boxes in the game's window. Null leaves it to the game.
     ime: ?*tuft_input.Ime = null,
 };
 
@@ -158,8 +157,7 @@ const ignored: Win32.Sink = .{ .ctx = &nobody, .func = struct {
     fn func(_: *anyopaque, _: Win32.Input) void {}
 }.func };
 
-/// ImGui calls it at the end of a frame when the caret moves or text input starts or stops. The
-/// render thread can't touch the IME, so this hands it to the windows' threads.
+/// Hands IME updates to the windows' threads, since the render thread can't touch the IME.
 fn setImeData(_: ?*c.ImGuiContext, viewport: ?*c.ImGuiViewport, data: ?*c.ImGuiPlatformImeData) callconv(.c) void {
     const self: *Host = @ptrCast(@alignCast(c.ImGui_GetPlatformIO().*.Platform_ImeUserData orelse return));
     const vp = viewport orelse return;
