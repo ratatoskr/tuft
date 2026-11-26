@@ -69,6 +69,10 @@ trait Reflector {
     // the runtime, so the garbage collector hears about references.
     void setFieldValue(usize field, usize obj, usize value);
     usize newString(string text);
+    // One of the type, zeroed and not constructed. 0 for one that can't be made, like an abstract
+    // class, an interface or an open generic. Construct it before it moves, or make it with
+    // `invoke` on a constructor instead.
+    usize newObject(usize type);
     // A GCHandle. A pinned one keeps it from moving, which only arrays and strings of plain values allow.
     usize newHandle(usize obj, bool pinned);
     usize handleTarget(usize handle);

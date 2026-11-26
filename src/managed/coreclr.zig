@@ -428,6 +428,12 @@ pub const CoreClr = struct {
 
     // Through the helper
 
+    /// Zeroed and not constructed. The garbage collector can move it, so construct it straight
+    /// away, or make it with `invoke` on a constructor and no `this`, which does both at once.
+    pub fn newObject(self: *const CoreClr, c: *Class) ?*Object {
+        return of(Object, self.reflector.newObject(id(c)));
+    }
+
     pub fn newString(self: *const CoreClr, text: [*:0]const u8) ?*String {
         return of(String, self.reflector.newString(std.mem.span(text)));
     }

@@ -439,6 +439,19 @@ sealed unsafe class Reflection : IReflector
 
     public nuint NewString(string text) => Keep(text);
 
+    public nuint NewObject(nuint type)
+    {
+        if (TypeOf(type) is not { } t || t.IsAbstract || t.IsInterface || t.ContainsGenericParameters) return 0;
+        try
+        {
+            return Keep(RuntimeHelpers.GetUninitializedObject(t));
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
+    }
+
     public nuint NewHandle(nuint obj, bool pinned)
     {
         try

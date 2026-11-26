@@ -406,6 +406,15 @@ pub const Runtime = union(Kind) {
         };
     }
 
+    /// An object of `c`, zeroed and not constructed, so call its `.ctor` next. The garbage collector
+    /// owns it, so keep a handle to hold on to it. CoreCLR's can move, so construct it straight
+    /// away there, or `invoke` a constructor with no `this`, which makes and constructs it at once.
+    pub fn newObject(self: *const Runtime, c: *Class) ?*Object {
+        return switch (self.*) {
+            inline else => |*r| r.newObject(c),
+        };
+    }
+
     /// From UTF-8. The runtime's garbage collector owns it, so keep a handle to hold on to it.
     pub fn newString(self: *const Runtime, text: [*:0]const u8) ?*String {
         return switch (self.*) {

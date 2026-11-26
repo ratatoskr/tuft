@@ -72,6 +72,7 @@ pub const Api = struct {
     object_get_class: *const fn (*Object) callconv(.c) ?*Class,
     object_unbox: *const fn (*Object) callconv(.c) ?*anyopaque,
     string_new: *const fn (*Domain, [*:0]const u8) callconv(.c) ?*String,
+    object_new: *const fn (*Domain, *Class) callconv(.c) ?*Object,
     string_chars: *const fn (*String) callconv(.c) ?[*]const u16,
     string_length: *const fn (*String) callconv(.c) i32,
     runtime_invoke: *const fn (*Method, ?*anyopaque, ?[*]const ?*anyopaque, ?*?*Object) callconv(.c) ?*Object,
@@ -302,6 +303,11 @@ pub const Mono = struct {
 
     pub fn unbox(self: *const Mono, o: *Object) ?*anyopaque {
         return self.api.object_unbox(o);
+    }
+
+    /// Not constructed: call its `.ctor` next.
+    pub fn newObject(self: *const Mono, c: *Class) ?*Object {
+        return self.api.object_new(self.domain() orelse return null, c);
     }
 
     pub fn newString(self: *const Mono, text: [*:0]const u8) ?*String {
