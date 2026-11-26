@@ -229,9 +229,10 @@ fn relocateRipOperand(out: *Emitter, d: insn.DecodedInsn, bytes: []const u8, tar
 fn writeFarRipOperand(out: *Emitter, d: insn.DecodedInsn, bytes: []const u8, target: usize) RelocateError!void {
     // push/pop [mem] move RSP, which the scratch push/pop would break
     if ((d.is(.primary, 0xFF) and d.modrm.?.reg == 6) or d.is(.primary, 0x8F)) return error.UnsupportedInstruction;
-    // VEX/EVEX/REX2 keep inverted register bits, so the REX.B fix won't work
-    if (hasVexLikePrefix(bytes)) return error.UnsupportedInstruction;
-    const scratch = pickScratch(d) orelse return error.UnsupportedInstruction;
+    const escape = escapeOf(bytes);
+    // REX2 keeps its B bits beside others it'd take more care to rewrite
+    if (escape) |e| if (e.kind == .rex2) return error.UnsupportedInstruction;
+    const scratch = pickScratch(d, if (escape) |e| e.vvvv(bytes) else null) orelse return error.UnsupportedInstruction;
 
     var movabs: [10]u8 = .{ 0x48, 0xB8 + scratch, 0, 0, 0, 0, 0, 0, 0, 0 };
     std.mem.writeInt(u64, movabs[2..10], target, .little);
@@ -242,7 +243,10 @@ fn writeFarRipOperand(out: *Emitter, d: insn.DecodedInsn, bytes: []const u8, tar
     const modrm_idx = d.disp_offset - 1;
     const start = out.len;
     try out.write(bytes[0..modrm_idx]);
-    if (d.rex != null) {
+    if (escape) |e| {
+        // VEX and EVEX keep B and X inverted, so set is none. 2-byte VEX has neither, and none's implied
+        if (e.kind != .vex2) out.buf[start + e.at + 1] |= 0x60;
+    } else if (d.rex != null) {
         for (out.buf[start..out.len]) |*b| {
             if ((b.* & 0xF0) == 0x40) {
                 b.* &= ~@as(u8, 1);
@@ -257,9 +261,14 @@ fn writeFarRipOperand(out: *Emitter, d: insn.DecodedInsn, bytes: []const u8, tar
     try out.write(&[_]u8{0x58 + scratch});
 }
 
-/// x64 only. RAX, RCX, RDX or RBX, skipping any the instruction uses.
-fn pickScratch(d: insn.DecodedInsn) ?u8 {
+/// x64 only. RAX, RCX, RDX or RBX, skipping any the instruction uses. `vvvv` is a VEX or EVEX
+/// operand register, which can be a general one, like BMI's. Unused, it reads as RAX, which is
+/// skipped all the same, as there's no telling.
+fn pickScratch(d: insn.DecodedInsn, vvvv: ?u4) ?u8 {
     var used = [4]bool{ false, false, false, false };
+    if (vvvv) |v| if (v < 4) {
+        used[v] = true;
+    };
     const reg = d.modrm.?.reg;
     const rex_r = if (d.rex) |rex| rex.r else false;
     if (!rex_r and reg < 4) used[reg] = true;
@@ -288,16 +297,37 @@ fn pickScratch(d: insn.DecodedInsn) ?u8 {
     return null;
 }
 
-/// VEX, EVEX or REX2 escape after legacy prefixes.
-fn hasVexLikePrefix(bytes: []const u8) bool {
-    for (bytes) |b| {
+/// A VEX, EVEX or REX2 escape after the legacy prefixes.
+const Escape = struct {
+    kind: enum { vex2, vex3, evex, rex2 },
+    /// Where its first byte is.
+    at: usize,
+
+    /// The register its `vvvv` names, which it keeps inverted. Null for REX2, which has none.
+    fn vvvv(self: Escape, bytes: []const u8) ?u4 {
+        const field: u8 = switch (self.kind) {
+            .vex2 => bytes[self.at + 1],
+            .vex3 => bytes[self.at + 2],
+            .evex => bytes[self.at + 2],
+            .rex2 => return null,
+        };
+        return @intCast(~(field >> 3) & 0xF);
+    }
+};
+
+/// x64 only, where C4, C5 and 62 are always escapes.
+fn escapeOf(bytes: []const u8) ?Escape {
+    for (bytes, 0..) |b, i| {
         switch (b) {
             0x26, 0x2E, 0x36, 0x3E, 0x64, 0x65, 0x66, 0x67, 0xF0, 0xF2, 0xF3 => continue,
-            0xC4, 0xC5, 0x62, 0xD5 => return true,
-            else => return false,
+            0xC5 => return .{ .kind = .vex2, .at = i },
+            0xC4 => return .{ .kind = .vex3, .at = i },
+            0x62 => return .{ .kind = .evex, .at = i },
+            0xD5 => return .{ .kind = .rex2, .at = i },
+            else => return null,
         }
     }
-    return false;
+    return null;
 }
 
 fn isTerminator(d: insn.DecodedInsn) bool {
@@ -310,4 +340,60 @@ fn isTerminator(d: insn.DecodedInsn) bool {
         .@"0F" => d.opcode == 0x0B,
         .other => false,
     };
+}
+
+const tests = struct {
+    const testing = std.testing;
+    /// Too far from anything a test runs at to reach with a disp32.
+    const far = 0x7FF0_0000_0000;
+
+    /// `code`, which reads `[rip+disp32]`, as though it reads `far`, through a scratch register.
+    fn rewrite(code: []const u8, buf: []u8) ![]const u8 {
+        const d = try insn.decodeBytes(code, @intFromPtr(code.ptr));
+        var out: Emitter = .{ .buf = buf, .base = @intFromPtr(buf.ptr) };
+        try writeFarRipOperand(&out, d, code, far);
+        return buf[0..out.len];
+    }
+
+    fn expectThrough(scratch: u8, op: []const u8, got: []const u8) !void {
+        try testing.expectEqual(0x50 + scratch, got[0]);
+        try testing.expectEqualSlices(u8, &.{ 0x48, 0xB8 + scratch }, got[1..3]);
+        try testing.expectEqual(far, std.mem.readInt(u64, got[3..11], .little));
+        try testing.expectEqualSlices(u8, op, got[11 .. got.len - 1]);
+        try testing.expectEqual(0x58 + scratch, got[got.len - 1]);
+    }
+
+    test "far RIP-relative 2-byte VEX goes through a scratch register" {
+        if (!is64) return error.SkipZigTest;
+        var buf: [64]u8 = undefined;
+        // vmovss xmm0, [rip+0x10], as the game's slow rate update opens with. RAX shares xmm0's
+        // number, so it's skipped
+        try expectThrough(1, &.{ 0xC5, 0xFA, 0x10, 0x01 }, try rewrite(&.{ 0xC5, 0xFA, 0x10, 0x05, 0x10, 0, 0, 0 }, &buf));
+    }
+
+    test "far RIP-relative 3-byte VEX clears its inverted B" {
+        if (!is64) return error.SkipZigTest;
+        var buf: [64]u8 = undefined;
+        // vmovaps xmm1, [rip+0x10] with B set, which RIP-relative ignores but [rdx] wouldn't. An
+        // unused vvvv reads as RAX, so that's skipped too
+        try expectThrough(2, &.{ 0xC4, 0xE1, 0x78, 0x28, 0x0A }, try rewrite(&.{ 0xC4, 0xC1, 0x78, 0x28, 0x0D, 0x10, 0, 0, 0 }, &buf));
+    }
+
+    test "far RIP-relative EVEX clears its inverted B and X" {
+        if (!is64) return error.SkipZigTest;
+        var buf: [64]u8 = undefined;
+        // vmovups zmm2, [rip+0x10], with B and X set
+        try expectThrough(1, &.{ 0x62, 0xF1, 0x7C, 0x48, 0x10, 0x11 }, try rewrite(&.{ 0x62, 0x91, 0x7C, 0x48, 0x10, 0x15, 0x10, 0, 0, 0 }, &buf));
+    }
+
+    test "far RIP-relative VEX skips the general register vvvv names" {
+        if (!is64) return error.SkipZigTest;
+        var buf: [64]u8 = undefined;
+        // andn eax, ecx, [rip+0x10]: reg is eax and vvvv ecx, so rdx it is
+        try expectThrough(2, &.{ 0xC4, 0xE2, 0x70, 0xF2, 0x02 }, try rewrite(&.{ 0xC4, 0xE2, 0x70, 0xF2, 0x05, 0x10, 0, 0, 0 }, &buf));
+    }
+};
+
+test {
+    _ = tests;
 }

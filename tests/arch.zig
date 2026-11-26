@@ -383,14 +383,22 @@ const x64_tests = if (arch.bits != 64) struct {} else struct {
         try testing.expectEqual(0xCAFEBABE, tramp_fn());
     }
 
-    test "x64 far rejects VEX" {
-        var code: [32]u8 = @splat(0xCC);
-        // vmovaps xmm0, [rip+0x10]
-        code[0..8].* = .{ 0xC5, 0xF8, 0x28, 0x05, 0x10, 0x00, 0x00, 0x00 };
-        var buf: [128]u8 = undefined;
+    test "x64 far VEX RIP-relative load" {
+        const stub = try memory.pages.allocAny(64);
+        defer memory.pages.free(stub);
+        @memset(stub, 0xCC);
+        @memcpy(stub[0..9], &[_]u8{
+            0xC5, 0xFA, 0x10, 0x05, 0x18, 0x00, 0x00, 0x00, // vmovss xmm0, [rip+24] -> cell at +32
+            0xC3, // ret
+        });
+        std.mem.writeInt(u32, stub[32..36], @bitCast(@as(f32, 1.5)), .little);
 
-        const far_base = @intFromPtr(&code) + 0x4_0000_0000;
-        try testing.expectError(error.UnsupportedInstruction, relocate.buildTrampoline(@intFromPtr(&code), 5, far_base, &buf));
+        const tramp = try allocFar(@intFromPtr(stub.ptr));
+        defer memory.pages.free(tramp);
+        _ = try relocate.buildTrampoline(@intFromPtr(stub.ptr), 5, @intFromPtr(tramp.ptr), tramp);
+
+        const tramp_fn: *const fn () callconv(.c) f32 = @ptrCast(tramp.ptr);
+        try testing.expectEqual(1.5, tramp_fn());
     }
 };
 
