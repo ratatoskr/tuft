@@ -42,7 +42,6 @@ pub const Error = error{
 };
 
 const Queue = tuft_event.Mailbox(Trigger, 64);
-const max_held = 16;
 
 allocator: std.mem.Allocator,
 blocker: *Blocker,
@@ -62,14 +61,14 @@ queue_overflowed: std.atomic.Value(bool) = .init(false),
 
 // Window thread only
 /// Keyed by the key that pressed them.
-held: HeldList = .{},
+held: HeldList = .empty,
 /// Their repeats, chars and release get swallowed too.
 consumed: std.EnumSet(@import("root.zig").Key) = .empty,
 /// So swallow the chars it types.
 eat_chars: bool = false,
 
 // Gamepad poll thread only
-pad_held: HeldList = .{},
+pad_held: HeldList = .empty,
 pad_consumed: std.EnumSet(@import("root.zig").Key) = .empty,
 
 // The window thread writes, any thread reads
@@ -82,10 +81,8 @@ mouse: tuft_arch.atomic.Value(u64) = .init(0),
 mouse_seen: tuft_arch.atomic.Value(bool) = .init(false),
 
 const Held = struct { key: @import("root.zig").Key, serial: u64 };
-const HeldList = struct {
-    items: [max_held]Held = undefined,
-    len: usize = 0,
-};
+/// A binding's key, while it's held. As many as are held at once, so every release is reported.
+const HeldList = std.ArrayList(Held);
 
 /// Freed by `unbind`.
 pub const Binding = struct {
@@ -180,6 +177,8 @@ pub fn destroy(self: *Keybinds) void {
     while (pad_it.next()) |key| self.blocker.hideKey(key, false);
     if (self.bindings.items.len != 0) log.err("{d} keybinding(s) still bound at shutdown", .{self.bindings.items.len});
     self.bindings.deinit(self.allocator);
+    self.held.deinit(self.allocator);
+    self.pad_held.deinit(self.allocator);
     self.triggered.deinit();
     self.allocator.destroy(self);
 }
@@ -432,29 +431,28 @@ fn onPad(self: *Keybinds, update: *const Gamepads.Update) void {
 }
 
 fn press(self: *Keybinds, list: *HeldList, key: @import("root.zig").Key, serial: u64) void {
+    // Room first, so a press that can't be held isn't reported either, and never sticks
+    list.ensureUnusedCapacity(self.allocator, 1) catch return;
     self.queueTrigger(.{ .serial = serial, .phase = .pressed });
-    if (list.len == max_held) return; // we just won't report its release
-    list.items[list.len] = .{ .key = key, .serial = serial };
-    list.len += 1;
+    list.appendAssumeCapacity(.{ .key = key, .serial = serial });
 }
 
 fn release(self: *Keybinds, list: *HeldList, key: @import("root.zig").Key) void {
     var i: usize = 0;
-    while (i < list.len) {
+    while (i < list.items.len) {
         if (list.items[i].key != key) {
             i += 1;
             continue;
         }
         self.queueTrigger(.{ .serial = list.items[i].serial, .phase = .released });
-        list.len -= 1;
-        list.items[i] = list.items[list.len];
+        _ = list.swapRemove(i);
     }
 }
 
 /// Focus moved away so the releases won't come. Report them now. Controllers keep going.
 fn releaseAll(self: *Keybinds) void {
-    for (self.held.items[0..self.held.len]) |h| self.queueTrigger(.{ .serial = h.serial, .phase = .released });
-    self.held.len = 0;
+    for (self.held.items) |h| self.queueTrigger(.{ .serial = h.serial, .phase = .released });
+    self.held.clearRetainingCapacity();
     var it = self.consumed.iterator();
     while (it.next()) |key| self.blocker.hideKey(key, false);
     self.consumed = .empty;

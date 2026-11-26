@@ -138,25 +138,30 @@ const Hub = struct {
 
     fn ready(ctx: ?*anyopaque, m: *const LoadWatch.Module) void {
         const self: *Hub = @ptrCast(@alignCast(ctx.?));
-        // Claim under the lock so `destroy` waits, then fire outside it
-        var claimed: [16]*WhenLoaded = undefined;
-        var n: usize = 0;
-        {
-            self.acquire();
-            defer self.release();
-            var node = self.head;
-            while (node) |w| : (node = w.next) {
-                if (n == claimed.len) break;
-                if (!w.nameIs(m)) continue;
-                if (w.state.cmpxchgStrong(.waiting, .firing, .acq_rel, .acquire) != null) continue;
-                claimed[n] = w;
-                n += 1;
+        // Claim under the lock so `destroy` waits, then fire outside it, a batch at a time till none are left
+        var pinned = false;
+        while (true) {
+            var claimed: [16]*WhenLoaded = undefined;
+            var n: usize = 0;
+            {
+                self.acquire();
+                defer self.release();
+                var node = self.head;
+                while (node) |w| : (node = w.next) {
+                    if (n == claimed.len) break;
+                    if (!w.nameIs(m)) continue;
+                    if (w.state.cmpxchgStrong(.waiting, .firing, .acq_rel, .acquire) != null) continue;
+                    claimed[n] = w;
+                    n += 1;
+                }
             }
-        }
-        if (n != 0) pin(m.base);
-        for (claimed[0..n]) |w| {
-            w.listener.ready(w.listener.ctx, m.base);
-            w.state.store(.done, .release);
+            if (n == 0) return;
+            if (!pinned) pin(m.base);
+            pinned = true;
+            for (claimed[0..n]) |w| {
+                w.listener.ready(w.listener.ctx, m.base);
+                w.state.store(.done, .release);
+            }
         }
     }
 };
@@ -196,12 +201,13 @@ const tests = struct {
             if (module.findBase(c) == null) break c;
         } else return error.SkipZigTest;
 
-        var a: Count = .{};
-        var b: Count = .{};
-        const wa = try create(testing.allocator, target, .{ .ctx = &a, .ready = Count.ready });
-        defer wa.destroy();
-        const wb = try create(testing.allocator, target, .{ .ctx = &b, .ready = Count.ready });
-        defer wb.destroy();
+        // More than are fired in one batch
+        var counts: [40]Count = @splat(.{});
+        var watchers: [counts.len]*WhenLoaded = undefined;
+        for (&counts, &watchers) |*c, *w| w.* = try create(testing.allocator, target, .{ .ctx = c, .ready = Count.ready });
+        defer for (watchers) |w| w.destroy();
+        const a = &counts[0];
+        const wa = watchers[0];
         try testing.expectEqual(0, a.calls.load(.acquire));
 
         var wide: [32:0]u16 = undefined;
@@ -211,9 +217,8 @@ const tests = struct {
         defer _ = win.FreeLibrary(handle);
 
         var waited: u32 = 0;
-        while ((a.calls.load(.acquire) == 0 or b.calls.load(.acquire) == 0) and waited < 2000) : (waited += 1) win.Sleep(1);
-        try testing.expectEqual(1, a.calls.load(.acquire));
-        try testing.expectEqual(1, b.calls.load(.acquire));
+        while (counts[counts.len - 1].calls.load(.acquire) == 0 and waited < 2000) : (waited += 1) win.Sleep(1);
+        for (&counts) |*c| try testing.expectEqual(1, c.calls.load(.acquire));
         try testing.expectEqual(@intFromPtr(handle), a.base.load(.acquire));
         try testing.expect(wa.fired());
 
