@@ -148,6 +148,8 @@ pub fn findSwapChainMethods() !SwapChainMethods {
 /// Nesting depth on this thread, so `Present1` into `Present` reports once.
 threadlocal var present_depth: u32 = 0;
 threadlocal var resize_depth: u32 = 0;
+/// Set while `PresentHook.probePresent` makes its throwaway, so creation hooks don't take it for the game's.
+threadlocal var probing = false;
 
 /// The DXGI path. Init `tuft_hook` first.
 /// D3D12 needs the present queue, which DXGI won't say, so we hook `ExecuteCommandLists` for it.
@@ -235,6 +237,28 @@ pub const PresentHook = struct {
         return self;
     }
 
+    /// Whether Present is hooked, from the game's swap chain or `probePresent`.
+    pub fn watching(self: *PresentHook) bool {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+        return self.present_hooks.len + self.present1_hooks.len != 0;
+    }
+
+    /// Hooks Present where a throwaway swap chain has it, for a game swap chain made before `createEarly`.
+    pub fn probePresent(self: *PresentHook) !void {
+        probing = true;
+        const methods = findSwapChainMethods();
+        probing = false;
+        const m = try methods;
+        self.lock.lock();
+        defer self.lock.unlock();
+        self.addLocked(ResizeBuffersFn, &self.resize_hooks, m.resize_buffers, onResizeBuffers, "ResizeBuffers");
+        if (m.resize_buffers1) |a| self.addLocked(ResizeBuffers1Fn, &self.resize1_hooks, a, onResizeBuffers1, "ResizeBuffers1");
+        if (m.set_color_space1) |a| self.addLocked(SetColorSpace1Fn, &self.color_space_hooks, a, onSetColorSpace1, "SetColorSpace1");
+        self.addLocked(PresentFn, &self.present_hooks, m.present, onPresent, "Present");
+        if (m.present1) |a| self.addLocked(Present1Fn, &self.present1_hooks, a, onPresent1, "Present1");
+    }
+
     pub fn enable(self: *PresentHook) !void {
         self.lock.lock();
         defer self.lock.unlock();
@@ -250,12 +274,14 @@ pub const PresentHook = struct {
 
     fn onCreateSwapChain(self: *PresentHook, h: *hook.TypedHook(CreateSwapChainFn), factory: *anyopaque, device: *anyopaque, desc: *SwapChainDesc, out: *?*SwapChain) HRESULT {
         const hr = h.original()(factory, device, desc, out);
+        if (probing) return hr;
         self.created("CreateSwapChain", hr, out.*);
         return hr;
     }
 
     fn onCreateSwapChainForHwnd(self: *PresentHook, h: *hook.TypedHook(CreateSwapChainForHwndFn), factory: *anyopaque, device: *anyopaque, window: tuft_window.Handle, desc: *const anyopaque, fullscreen: ?*const anyopaque, output: ?*anyopaque, out: *?*SwapChain) HRESULT {
         const hr = h.original()(factory, device, window, desc, fullscreen, output, out);
+        if (probing) return hr;
         if (!com.succeeded(hr)) describeFailed(device, window, @ptrCast(@alignCast(desc)), fullscreen != null);
         self.created("CreateSwapChainForHwnd", hr, out.*);
         return hr;

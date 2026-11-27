@@ -34,6 +34,8 @@ pub const Options = struct {
     early: bool = false,
     /// What the game presents with, from a previous attach. Nobody probes.
     known: ?Known = null,
+    /// How long the game's window shows with an early path still blind before it probes.
+    fallback_grace_ms: u32 = 2000,
 };
 
 /// D3D9's device or DXGI's swap chain, ref held by the caller. Null for OpenGL and Vulkan.
@@ -68,6 +70,14 @@ lock: sys.sync.RwLock = .{},
 waits: std.EnumArray(Kind, ?*sys.module.WhenLoaded) = .initFill(null),
 /// Set by `enable`, so paths hooked later get enabled right away. Guarded by `lock`.
 enabled: bool = false,
+/// When each path that hooked creation went in, 0 once settled. Guarded by `lock`.
+early_since: std.EnumArray(Kind, u64) = .initFill(0),
+/// Probes early paths the game got ahead of. Started by the first one.
+fallback: ?*anyopaque = null,
+fallback_wake: ?sys.win.HANDLE = null,
+fallback_stop: std.atomic.Value(bool) = .init(false),
+
+const fallback_poll_ms = 250;
 
 /// Hooks each loaded path, disabled. `enable` starts the reports. Init `tuft_hook` first.
 pub fn create(allocator: std.mem.Allocator, listener: gfx.Listener, options: Options) !*Paths {
@@ -146,15 +156,108 @@ fn addPath(self: *Paths, comptime kind: Kind, base: usize) void {
         }
         return;
     };
+    var early_hook = false;
     const kept = blk: {
         self.lock.lock();
         defer self.lock.unlock();
         if (self.claimed.load(.acquire)) break :blk false;
         @field(self.hooks, @tagName(kind)) = p;
         if (self.enabled) p.enable() catch |err| log.warn("Can't hook {t} presents: {t}", .{ kind, err });
+        if (@hasDecl(PresentHook, "probePresent") and !p.watching()) {
+            self.early_since.set(kind, @max(sys.thread.tickMs(), 1));
+            early_hook = true;
+        }
         break :blk true;
     };
-    if (!kept) p.destroy();
+    if (!kept) return p.destroy();
+    if (early_hook) self.startFallback();
+}
+
+/// Idempotent. Runs from `addPath`, which `destroyHooks` stops before it gets here.
+fn startFallback(self: *Paths) void {
+    if (self.fallback_wake) |w| {
+        _ = sys.win.SetEvent(w);
+        return;
+    }
+    const wake = sys.win.CreateEventW(null, .FALSE, .FALSE, null) orelse return log.warn("Can't watch for the game getting ahead of our hooks: no event", .{});
+    self.fallback_wake = wake;
+    self.fallback = sys.thread.spawn(*Paths, runFallback, self) catch |err| {
+        log.warn("Can't watch for the game getting ahead of our hooks: {t}", .{err});
+        return;
+    };
+}
+
+/// The game may have made its device before our creation hooks went in. Once its window has
+/// shown a while with nothing presented, we find Present with a throwaway, like attaching does.
+fn runFallback(self: *Paths) void {
+    var window_since: u64 = 0;
+    while (!self.fallback_stop.load(.acquire)) {
+        const pending = self.checkFallback(&window_since);
+        _ = sys.win.WaitForSingleObject(self.fallback_wake.?, if (pending) fallback_poll_ms else sys.win.INFINITE);
+    }
+}
+
+/// True while an early path still waits.
+fn checkFallback(self: *Paths, window_since: *u64) bool {
+    const settled = self.owner.load(.acquire) != no_owner or self.claimed.load(.acquire);
+    const now = sys.thread.tickMs();
+    const grace = self.options.fallback_grace_ms;
+    if (!settled and window_since.* == 0 and gameWindowShown()) window_since.* = now;
+    var due: std.EnumSet(Kind) = .empty;
+    var waiting = false;
+    {
+        self.lock.lock();
+        defer self.lock.unlock();
+        for (std.enums.values(Kind)) |kind| {
+            const since = self.early_since.get(kind);
+            if (since == 0) continue;
+            if (settled) {
+                self.early_since.set(kind, 0);
+            } else if (window_since.* != 0 and now -| window_since.* >= grace and now -| since >= grace) {
+                self.early_since.set(kind, 0);
+                due.insert(kind);
+            } else waiting = true;
+        }
+    }
+    var it = due.iterator();
+    while (it.next()) |kind| switch (kind) {
+        inline else => |k| self.probeLate(k),
+    };
+    return waiting;
+}
+
+fn probeLate(self: *Paths, comptime kind: Kind) void {
+    if (!@hasDecl(PresentHookOf(kind), "probePresent")) return;
+    // Shared, so `claim` can't destroy it mid-probe
+    self.lock.lockShared();
+    defer self.lock.unlockShared();
+    const p = @field(self.hooks, @tagName(kind)) orelse return;
+    if (p.watching()) return;
+    log.info("{t}: the game's window is up but nothing presented; it may have made its device before we hooked creation. Probing with a throwaway device of our own for where Present is", .{kind});
+    p.probePresent() catch |err| log.warn("{t}: probe failed: {t}", .{ kind, err });
+}
+
+/// A visible, unowned, non-tool top-level window of this process.
+fn gameWindowShown() bool {
+    const Search = struct {
+        pid: u32,
+        found: bool = false,
+
+        fn visit(hwnd: sys.win.HWND, param: isize) callconv(.winapi) sys.win.BOOL {
+            const search: *@This() = @ptrFromInt(@as(usize, @bitCast(param)));
+            var pid: u32 = 0;
+            _ = sys.win.GetWindowThreadProcessId(hwnd, &pid);
+            if (pid != search.pid or !sys.win.IsWindowVisible(hwnd).toBool()) return .TRUE;
+            if (sys.win.GetWindow(hwnd, sys.win.GW_OWNER) != null) return .TRUE;
+            const ex_style: usize = @bitCast(sys.win.GetWindowLongPtrW(hwnd, sys.win.GWL_EXSTYLE));
+            if (ex_style & sys.win.WS_EX_TOOLWINDOW != 0) return .TRUE;
+            search.found = true;
+            return .FALSE;
+        }
+    };
+    var search: Search = .{ .pid = sys.win.GetCurrentProcessId() };
+    _ = sys.win.EnumWindows(Search.visit, @bitCast(@intFromPtr(&search)));
+    return search.found;
 }
 
 /// Releases tracked surfaces without `detach`, like `gfx.Listener` says.
@@ -163,12 +266,24 @@ pub fn destroy(self: *Paths) void {
     self.allocator.destroy(self);
 }
 
+/// Joins the fallback thread, so no probe runs after this.
+fn stopFallback(self: *Paths) void {
+    const wake = self.fallback_wake orelse return;
+    self.fallback_stop.store(true, .release);
+    _ = sys.win.SetEvent(wake);
+    if (self.fallback) |t| sys.thread.join(t);
+    self.fallback = null;
+    sys.win.CloseHandle(wake);
+    self.fallback_wake = null;
+}
+
 fn destroyHooks(self: *Paths) void {
     // No path gets added after this
     for (&self.waits.values) |*w| if (w.*) |x| {
         x.destroy();
         w.* = null;
     };
+    self.stopFallback();
     self.destroyExcept(null);
 }
 
@@ -341,6 +456,34 @@ const tests = struct {
         paths.destroy();
         _ = owned.swap_chain.present(0, 0);
         try testing.expectEqual(2, recorder.frames);
+    }
+
+    test "probes when the game got ahead of early hooks" {
+        const saved = quiet();
+        defer testing.log_level = saved;
+        try hook.init(testing.allocator);
+        defer hook.deinit();
+
+        // Made before the creation hooks, like a game that renders before we get in
+        const owned = try gfx.d3d11.OwnedSwapChain.create();
+        defer owned.destroy();
+        var recorder: Recorder = .{};
+        const paths = try Paths.create(testing.allocator, .of(Recorder, &recorder), .{ .early = true, .fallback_grace_ms = 0 });
+        defer paths.destroy();
+        try paths.enable();
+
+        _ = owned.swap_chain.present(0, 0);
+        try testing.expectEqual(0, recorder.attaches);
+
+        const SW_SHOWNOACTIVATE = 4;
+        _ = sys.win.ShowWindow(owned.hwnd, SW_SHOWNOACTIVATE);
+        var waited: u32 = 0;
+        while (recorder.attaches == 0 and waited < 5000) : (waited += 10) {
+            sys.win.Sleep(10);
+            _ = owned.swap_chain.present(0, 0);
+        }
+        try testing.expectEqual(1, recorder.attaches);
+        try testing.expectEqual(@as(*anyopaque, owned.swap_chain), recorder.last.?.swap_chain);
     }
 
     test "ignores other paths once claimed" {

@@ -350,6 +350,8 @@ pub fn findDeviceMethods() !DeviceMethods {
 /// Nesting depth on this thread, so calls through other hooks report once.
 threadlocal var present_depth: u32 = 0;
 threadlocal var reset_depth: u32 = 0;
+/// Set while `PresentHook.probePresent` makes its throwaway, so creation hooks don't take it for the game's.
+threadlocal var probing = false;
 
 /// The D3D9 path. Init `tuft_hook` first.
 pub const PresentHook = struct {
@@ -418,6 +420,27 @@ pub const PresentHook = struct {
         return self;
     }
 
+    /// Whether Present is hooked, from the game's device or `probePresent`.
+    pub fn watching(self: *PresentHook) bool {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+        return self.present_hooks.len + self.present_ex_hooks.len != 0;
+    }
+
+    /// Hooks Present where a throwaway device has it, for a game device made before `createEarly`.
+    pub fn probePresent(self: *PresentHook) !void {
+        probing = true;
+        const methods = findDeviceMethods();
+        probing = false;
+        const m = try methods;
+        self.lock.lock();
+        defer self.lock.unlock();
+        for (m.reset.slice()) |a| self.addLocked(Device.ResetFn, &self.reset_hooks, a, onReset, "Reset");
+        for (m.reset_ex.slice()) |a| self.addLocked(Device.ResetExFn, &self.reset_ex_hooks, a, onResetEx, "ResetEx");
+        for (m.present.slice()) |a| self.addLocked(Device.PresentFn, &self.present_hooks, a, onPresent, "Present");
+        for (m.present_ex.slice()) |a| self.addLocked(Device.PresentExFn, &self.present_ex_hooks, a, onPresentEx, "PresentEx");
+    }
+
     pub fn enable(self: *PresentHook) !void {
         self.lock.lock();
         defer self.lock.unlock();
@@ -451,6 +474,7 @@ pub const PresentHook = struct {
         self.reset_ex_hooks.destroy();
     }
     fn onCreate9(self: *PresentHook, h: *hook.TypedHook(Create9Fn), sdk_version: u32) ?*Direct3D {
+        if (probing) return h.original()(sdk_version);
         const d3d = h.original()(sdk_version) orelse {
             log.info("d3d9: the game's Direct3DCreate9 failed", .{});
             return null;
@@ -462,6 +486,7 @@ pub const PresentHook = struct {
 
     fn onCreate9Ex(self: *PresentHook, h: *hook.TypedHook(Create9ExFn), sdk_version: u32, out: *?*Direct3D) HRESULT {
         const hr = h.original()(sdk_version, out);
+        if (probing) return hr;
         if (com.succeeded(hr)) if (out.*) |d3d| {
             log.info("d3d9: the game called Direct3DCreate9Ex; waiting for it to make a device", .{});
             self.watchDirect3D(d3d, true);
@@ -473,6 +498,7 @@ pub const PresentHook = struct {
 
     fn onCreateDevice(self: *PresentHook, h: *hook.TypedHook(CreateDeviceFn), d3d: *Direct3D, adapter: u32, device_type: u32, focus: ?Hwnd, behavior: u32, params: *PresentParameters, out: *?*Device) HRESULT {
         const hr = h.original()(d3d, adapter, device_type, focus, behavior, params, out);
+        if (probing) return hr;
         logCreated("CreateDevice", hr, device_type, focus, params);
         if (com.succeeded(hr)) if (out.*) |device| self.watchDevice(device);
         return hr;
@@ -480,6 +506,7 @@ pub const PresentHook = struct {
 
     fn onCreateDeviceEx(self: *PresentHook, h: *hook.TypedHook(CreateDeviceExFn), d3d: *Direct3D, adapter: u32, device_type: u32, focus: ?Hwnd, behavior: u32, params: *PresentParameters, mode: ?*anyopaque, out: *?*Device) HRESULT {
         const hr = h.original()(d3d, adapter, device_type, focus, behavior, params, mode, out);
+        if (probing) return hr;
         logCreated("CreateDeviceEx", hr, device_type, focus, params);
         if (com.succeeded(hr)) if (out.*) |device| self.watchDevice(device);
         return hr;
