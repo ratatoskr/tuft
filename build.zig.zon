@@ -22,12 +22,12 @@
             .hash = "N-V-__8AAB5MiwIHZ-xzOzH98dswZMouQWfEZ1cimKD-hmEt",
         },
         .imgui = .{
-            .url = "git+https://github.com/ocornut/imgui?ref=v1.93.0-docking#b916186e66aa3c02b72c6ca17455516512ed8049",
-            .hash = "N-V-__8AAIcIiQBQX2RxQFLvaMZafdWRY_FqA7kql4vDWKb0",
+            .url = "git+https://github.com/ocornut/imgui?ref=v1.93.1-docking#144727fad6ded3055d388dadc4072c9c25ee1891",
+            .hash = "N-V-__8AAF3PiQCq2K6W13KZHTtd1UCAJRJG7v9cfSHVQJMs",
         },
         .dear_bindings = .{
-            .url = "https://github.com/dearimgui/dear_bindings/releases/download/DearBindings_v0.29_ImGui_v1.93.0-docking/DearBindings_v0.29_ImGui_v1.93.0-docking.zip",
-            .hash = "N-V-__8AAGLZgAR042VqIB5Nv_Ivy8oB9ZzA4cQIwC4kpV1P",
+            .url = "https://github.com/dearimgui/dear_bindings/releases/download/DearBindings_v0.29_ImGui_v1.93.1-docking/DearBindings_v0.29_ImGui_v1.93.1-docking.zip",
+            .hash = "N-V-__8AABfEfAQWhQwmpwTTuGCyyFyCBhO0frIuM2kVpF3l",
         },
         .imguizmo = .{
             .url = "git+https://github.com/cedricguillemet/imguizmo#5b473bc30438dc128520b90b688745bca85c4a91",

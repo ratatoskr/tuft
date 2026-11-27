@@ -1268,7 +1268,7 @@ const tests = struct {
             }
         });
         const version: [*:0]const u8 = @ptrCast(c.ImGui_GetVersion());
-        try testing.expectEqualStrings("1.93.0", std.mem.span(version));
+        try testing.expectEqualStrings("1.93.1", std.mem.span(version));
     }
 
     test "wrapper via lookup" {
