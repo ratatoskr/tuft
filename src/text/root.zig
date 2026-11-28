@@ -1,6 +1,8 @@
-//! Text in fixed buffers, cut short if it doesn't fit.
+//! Text in fixed buffers, cut short if it doesn't fit, and pools that keep each string once.
 
 const std = @import("std");
+
+pub const StringPool = @import("StringPool.zig");
 
 /// A short message, like what went wrong. Extern so ABI structs can hold one.
 pub fn Message(comptime capacity: usize) type {
@@ -89,4 +91,5 @@ const tests = struct {
 
 test {
     _ = tests;
+    _ = StringPool;
 }
