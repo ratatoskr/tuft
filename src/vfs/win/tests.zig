@@ -47,6 +47,7 @@ const GENERIC_WRITE = 0x40000000;
 const SHARE_ALL = 7;
 const CREATE_NEW = 1;
 const CREATE_ALWAYS = 2;
+const OPEN_ALWAYS = 4;
 const OPEN_EXISTING = 3;
 const DUPLICATE_SAME_ACCESS = 2;
 
@@ -155,6 +156,29 @@ test "tracks a real file from open to close" {
     try testing.expectEqual(1, log.closed);
     try testing.expectEqual(1, log.reads);
     try testing.expectEqual(5, log.bytes);
+}
+
+test "opening real files again reuses their records, so it doesn't allocate" {
+    try hook.init(testing.allocator);
+    defer hook.deinit();
+    var counting: std.testing.FailingAllocator = .init(testing.allocator, .{});
+    const vfs = try Vfs.init(counting.allocator());
+    defer vfs.deinit();
+    var path_buf: [600]u8 = undefined;
+    const path = try tempPath(&path_buf, "tuft_vfs_reuse.txt");
+    const w = try wideAlloc(path);
+    defer testing.allocator.free(w);
+    defer _ = k32.DeleteFileW(w);
+
+    // Warmed up, so the handle table and a spare have room
+    var allocs: usize = 0;
+    for (0..5) |i| {
+        if (i == 2) allocs = counting.allocations;
+        const h = k32.CreateFileW(w, GENERIC_READ | GENERIC_WRITE, SHARE_ALL, null, OPEN_ALWAYS, 0, null);
+        try testing.expect(h != INVALID);
+        _ = k32.CloseHandle(h);
+    }
+    try testing.expectEqual(allocs, counting.allocations);
 }
 
 test "serves virtual files" {

@@ -80,6 +80,11 @@ pub const File = struct {
     node: ?*Store.Node = null,
     /// Platform state, like a virtual file's position.
     state: native.FileState = .{},
+    /// Where `path` and `requested` are kept, kept with it when it's reused, so opening doesn't allocate
+    path_room: []u8 = &.{},
+    requested_room: []u8 = &.{},
+    /// On `Vfs.spare` once closed
+    next_spare: ?*File = null,
 
     pub const Stats = struct {
         reads: atomic.Value(u64) = .init(0),
@@ -100,11 +105,26 @@ pub const File = struct {
         vfs.closed.fire(.{self});
         self.state.deinit(vfs, self);
         if (self.node) |n| vfs.store.release(n);
-        vfs.allocator.free(self.path);
-        if (self.requested) |r| vfs.allocator.free(r);
-        vfs.allocator.destroy(self);
+        vfs.spareFile(self);
+    }
+
+    fn free(self: *File, allocator: std.mem.Allocator) void {
+        allocator.free(self.path_room);
+        allocator.free(self.requested_room);
+        allocator.destroy(self);
     }
 };
+
+/// `text` in `room`, grown if it's too small. Rounded up, so a slightly longer path fits next time.
+fn keep(allocator: std.mem.Allocator, room: *[]u8, text: []const u8) ![]const u8 {
+    if (room.len < text.len) {
+        const grown = try allocator.alloc(u8, std.mem.alignForward(usize, @max(text.len, 128), 128));
+        allocator.free(room.*);
+        room.* = grown;
+    }
+    @memcpy(room.*[0..text.len], text);
+    return room.*[0..text.len];
+}
 
 /// Before an open. Listeners can redirect or refuse it.
 pub const OpenRequest = struct {
@@ -182,6 +202,10 @@ store: Store,
 table: std.AutoHashMapUnmanaged(usize, *File) = .empty,
 table_lock: RwLock = .{},
 next_id: atomic.Value(u64) = .init(1),
+/// Closed files kept for the next opens, with their paths' room, so the game opening files doesn't allocate
+spare: ?*File = null,
+spare_count: usize = 0,
+spare_lock: sys.sync.Mutex = .{},
 hooks: native.Hooks = .{},
 
 /// Before each open. Call `redirect` or `deny` on the request.
@@ -224,6 +248,10 @@ pub fn deinit(self: *Vfs) void {
     var it = self.table.valueIterator();
     while (it.next()) |f| f.*.release(self);
     self.table.deinit(self.allocator);
+    while (self.spare) |f| {
+        self.spare = f.next_spare;
+        f.free(self.allocator);
+    }
     self.store.deinit();
     self.open.deinit();
     self.opened.deinit();
@@ -344,15 +372,28 @@ pub fn newFile(self: *Vfs, path: []const u8, requested: ?[]const u8, options: st
     directory: bool,
     node: ?*Store.Node = null,
 }) !*File {
-    const file = try self.allocator.create(File);
-    errdefer self.allocator.destroy(file);
-    const owned_path = try self.allocator.dupe(u8, path);
-    errdefer self.allocator.free(owned_path);
-    const owned_requested = if (requested) |r| try self.allocator.dupe(u8, r) else null;
+    const file = self.takeSpare() orelse made: {
+        const f = try self.allocator.create(File);
+        f.path_room = &.{};
+        f.requested_room = &.{};
+        break :made f;
+    };
+    var path_room = file.path_room;
+    var requested_room = file.requested_room;
+    // Kept, rooms and all, for the next
+    errdefer {
+        file.path_room = path_room;
+        file.requested_room = requested_room;
+        self.spareFile(file);
+    }
+    const owned_path = try keep(self.allocator, &path_room, path);
+    const owned_requested = if (requested) |r| try keep(self.allocator, &requested_room, r) else null;
     file.* = .{
         .id = self.next_id.fetchAdd(1, .monotonic),
         .path = owned_path,
         .requested = owned_requested,
+        .path_room = path_room,
+        .requested_room = requested_room,
         .access = options.access,
         .kind = options.kind,
         .directory = options.directory,
@@ -362,6 +403,32 @@ pub fn newFile(self: *Vfs, path: []const u8, requested: ?[]const u8, options: st
     };
     if (options.node) |n| n.retain();
     return file;
+}
+
+/// Most closed files kept for reuse.
+const max_spare = 64;
+
+fn takeSpare(self: *Vfs) ?*File {
+    self.spare_lock.lock();
+    defer self.spare_lock.unlock();
+    const f = self.spare orelse return null;
+    self.spare = f.next_spare;
+    self.spare_count -= 1;
+    return f;
+}
+
+/// Kept for the next open, or freed past `max_spare`.
+fn spareFile(self: *Vfs, f: *File) void {
+    self.spare_lock.lock();
+    if (self.spare_count < max_spare) {
+        f.next_spare = self.spare;
+        self.spare = f;
+        self.spare_count += 1;
+        self.spare_lock.unlock();
+        return;
+    }
+    self.spare_lock.unlock();
+    f.free(self.allocator);
 }
 
 /// Copies of every open file, oldest first. Free with `freeSnapshots`.
