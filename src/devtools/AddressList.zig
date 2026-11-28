@@ -8,6 +8,7 @@ const ui = @import("tuft_ui");
 const mem = @import("tuft_mem");
 const salamander = @import("salamander_schema");
 const Text = @import("tuft_text").Text;
+const EditText = @import("tuft_text").EditText;
 pub const Chord = @import("tuft_input").Chord;
 
 const root = @import("root.zig");
@@ -27,7 +28,6 @@ const Type = Schema.Ref;
 const Ref = @import("tuft_schema").Ref;
 pub const Row = StructRows.Row;
 
-pub const max_offsets = 8;
 pub const default_length = 16;
 /// Counts read from memory past this are taken as garbage.
 pub const max_count = 1_000_000;
@@ -35,7 +35,6 @@ pub const max_count = 1_000_000;
 pub const max_shown = 1000;
 /// A byte pattern is three chars per byte.
 const max_text = max_len * 3;
-pub const max_hotkeys = 8;
 const detail_height = 200;
 const red: ui.Color = .{ 1, 0.4, 0.4, 1 };
 const no_row = std.math.maxInt(u32);
@@ -155,7 +154,7 @@ pub const Hotkey = struct {
 const NodeKey = struct {
     chord: ?Chord = null,
     action: Action = .toggle_hold,
-    value: Text(32) = .{},
+    value: EditText = .{},
 };
 
 const OwnedChoices = struct {
@@ -166,18 +165,17 @@ const OwnedChoices = struct {
 const Node = struct {
     /// Stays with it while it moves around the list.
     key: u64 = 0,
-    name: Text(64) = .{},
+    name: EditText = .{},
     /// For code to find it by, like `player.health`.
-    id: Text(64) = .{},
-    address: Text(128) = .{},
-    offsets: [max_offsets]Text(16) = @splat(.{}),
-    offset_count: u8 = 0,
+    id: EditText = .{},
+    address: EditText = .{},
+    offsets: std.ArrayList(EditText) = .empty,
     kind: Kind = .four_bytes,
     length: u16 = default_length,
     /// A layout type's name. Then `kind` and `length` don't matter.
-    type: Text(64) = .{},
+    type: EditText = .{},
     /// Empty if it's not an array.
-    count: Text(64) = .{},
+    count: EditText = .{},
     depth: u8 = 0,
     group: bool = false,
     expanded: bool = true,
@@ -190,10 +188,9 @@ const Node = struct {
     choices: ?*OwnedChoices = null,
     labels_only: bool = false,
     /// Another entry's choices, by its id.
-    choices_from: Text(64) = .{},
+    choices_from: EditText = .{},
     freeze: Freeze = .always,
-    hotkeys: [max_hotkeys]NodeKey = @splat(.{}),
-    hotkey_count: u8 = 0,
+    hotkeys: std.ArrayList(NodeKey) = .empty,
 
     fn size(self: *const Node) usize {
         return self.kind.size() orelse std.math.clamp(@as(usize, self.length), 1, max_len);
@@ -230,6 +227,8 @@ const Hold = struct {
 };
 
 const max_path = 160;
+/// A module and offset, like `kai.exe+0x1234`.
+const describe_len = std.fs.max_path_bytes + 32;
 
 /// A line of the table, a node or one of `rows`.
 const Shown = struct {
@@ -292,7 +291,29 @@ pub fn deinit(self: *AddressList) void {
     self.reorder.deinit();
 }
 
+/// Everything it owns. Nodes are moved about, never copied, so each is freed once.
 fn freeNode(self: *AddressList, node: *Node) void {
+    const gpa = self.allocator;
+    self.freeChoices(node);
+    for (node.offsets.items) |*o| o.deinit(gpa);
+    node.offsets.deinit(gpa);
+    for (node.hotkeys.items) |*h| h.value.deinit(gpa);
+    node.hotkeys.deinit(gpa);
+    inline for (.{ "name", "id", "address", "type", "count", "choices_from" }) |f| @field(node, f).deinit(gpa);
+}
+
+/// Out of memory, it keeps what it had.
+fn setText(self: *AddressList, text: *EditText, value: []const u8) void {
+    text.set(self.allocator, value) catch |err| self.fail("change it", err);
+}
+
+fn addOffset(self: *AddressList, node: *Node, text: []const u8) !void {
+    var t: EditText = try .init(self.allocator, text);
+    errdefer t.deinit(self.allocator);
+    try node.offsets.append(self.allocator, t);
+}
+
+fn freeChoices(self: *AddressList, node: *Node) void {
     const owned = node.choices orelse return;
     owned.arena.deinit();
     self.allocator.destroy(owned);
@@ -301,7 +322,7 @@ fn freeNode(self: *AddressList, node: *Node) void {
 
 /// Empty takes them away.
 fn setChoices(self: *AddressList, node: *Node, list: []const Choice) !void {
-    self.freeNode(node);
+    self.freeChoices(node);
     if (list.len == 0) return;
     const owned = try self.allocator.create(OwnedChoices);
     owned.* = .{ .arena = .init(self.allocator) };
@@ -477,9 +498,10 @@ fn newKey(self: *AddressList) u64 {
 /// Named by module when it's in one, so it's found again if the module moves.
 pub fn addAddress(self: *AddressList, address: usize, kind: Kind, length: usize) !void {
     var node: Node = .{ .kind = kind };
-    var buf: [128]u8 = undefined;
+    errdefer self.freeNode(&node);
+    var buf: [describe_len]u8 = undefined;
     const expression = self.symbols.describe(address, &buf) orelse (std.fmt.bufPrint(&buf, "0x{x}", .{address}) catch "");
-    node.address.set(expression);
+    try node.address.set(self.allocator, expression);
     if (length != 0) node.length = @intCast(@min(length, max_len));
     try self.insert(node);
 }
@@ -500,7 +522,8 @@ pub fn kindForLength(len: usize) Kind {
 
 pub fn addGroup(self: *AddressList, name: []const u8) !void {
     var node: Node = .{ .group = true };
-    node.name.set(name);
+    errdefer self.freeNode(&node);
+    try node.name.set(self.allocator, name);
     try self.insert(node);
 }
 
@@ -737,14 +760,14 @@ pub fn pickedItems(self: *const AddressList, arena: std.mem.Allocator) ![]Item {
 }
 
 fn itemOf(arena: std.mem.Allocator, n: *const Node, base_depth: u8) !Item {
-    const offsets = try arena.alloc([]const u8, n.offset_count);
-    for (offsets, n.offsets[0..n.offset_count]) |*dst, *src| dst.* = try arena.dupe(u8, src.get());
+    const offsets = try arena.alloc([]const u8, n.offsets.items.len);
+    for (offsets, n.offsets.items) |*dst, *src| dst.* = try arena.dupe(u8, src.get());
     const choices: []Choice = if (n.choices) |c| try arena.alloc(Choice, c.items.len) else &.{};
     if (n.choices) |c| for (choices, c.items) |*dst, src| {
         dst.* = .{ .value = src.value, .label = try arena.dupe(u8, src.label) };
     };
-    const hotkeys = try arena.alloc(Hotkey, n.hotkey_count);
-    for (hotkeys, n.hotkeys[0..n.hotkey_count]) |*dst, *src| dst.* = .{ .chord = src.chord, .action = src.action, .value = try arena.dupe(u8, std.mem.trim(u8, src.value.get(), " ")) };
+    const hotkeys = try arena.alloc(Hotkey, n.hotkeys.items.len);
+    for (hotkeys, n.hotkeys.items) |*dst, *src| dst.* = .{ .chord = src.chord, .action = src.action, .value = try arena.dupe(u8, std.mem.trim(u8, src.value.get(), " ")) };
     return .{
         .name = try arena.dupe(u8, n.name.get()),
         .id = try arena.dupe(u8, n.id.get()),
@@ -811,22 +834,19 @@ fn nodeOf(self: *AddressList, item: Item) !Node {
         .expanded = item.expanded,
         .freeze = item.freeze,
     };
-    node.name.set(item.name);
-    node.id.set(item.id);
-    node.address.set(item.address);
-    node.offset_count = @intCast(@min(item.offsets.len, max_offsets));
-    for (item.offsets[0..node.offset_count], 0..) |offset, k| node.offsets[k].set(offset);
-    node.hotkey_count = @intCast(@min(item.hotkeys.len, max_hotkeys));
-    for (item.hotkeys[0..node.hotkey_count], 0..) |h, k| {
-        node.hotkeys[k] = .{ .chord = h.chord, .action = h.action };
-        node.hotkeys[k].value.set(h.value);
-    }
+    errdefer self.freeNode(&node);
+    const gpa = self.allocator;
+    try node.name.set(gpa, item.name);
+    try node.id.set(gpa, item.id);
+    try node.address.set(gpa, item.address);
+    for (item.offsets) |offset| try self.addOffset(&node, offset);
+    for (item.hotkeys) |h| try self.appendHotkey(&node, h);
     if (!item.group) {
-        node.type.set(item.type);
-        node.count.set(item.count);
+        try node.type.set(gpa, item.type);
+        try node.count.set(gpa, item.count);
         node.bits = item.bits;
         node.labels_only = item.labels_only;
-        node.choices_from.set(item.choices_from);
+        try node.choices_from.set(gpa, item.choices_from);
         try self.setChoices(&node, item.choices);
     }
     return node;
@@ -851,10 +871,8 @@ fn resolve(self: *const AddressList, i: usize) anyerror!usize {
 
 fn resolveWhy(self: *const AddressList, i: usize, problem: ?*Location.Problem) anyerror!usize {
     const node = &self.nodes.items[i];
-    var offsets: [max_offsets][]const u8 = undefined;
-    for (node.offsets[0..node.offset_count], 0..) |*offset, k| offsets[k] = offset.get();
     const base = if (isRelative(node.address.get())) try self.baseOf(i) else null;
-    return resolveText(self.memory, self.symbols, node.address.get(), offsets[0..node.offset_count], base, problem);
+    return resolveWith(self.memory, self.symbols, node.address.get(), node.offsets.items, base, problem);
 }
 
 /// Where + addresses in `i`'s group are from, if its group has an address.
@@ -875,10 +893,16 @@ pub fn resolveItem(memory: Memory, symbols: Symbols, all: []const Item, i: usize
 
 /// `address` is `tuft_mem.Location` text, from `base` if it starts with + or -, then pointer offsets.
 pub fn resolveText(memory: Memory, symbols: Symbols, address: []const u8, offsets: []const []const u8, base: ?usize, problem: ?*Location.Problem) !usize {
+    return resolveWith(memory, symbols, address, offsets, base, problem);
+}
+
+/// `offsets` as text, or a node's `EditText`s, so nothing's gathered first.
+fn resolveWith(memory: Memory, symbols: Symbols, address: []const u8, offsets: anytype, base: ?usize, problem: ?*Location.Problem) !usize {
     var at = try Location.eval(address, .{ .symbols = symbols, .memory = memory, .base = base }, problem);
-    for (offsets) |offset| {
+    for (offsets) |*offset| {
+        const text: []const u8 = if (@TypeOf(offset.*) == EditText) offset.get() else offset.*;
         const pointer = memory.load(usize, at) catch return error.Unreadable;
-        at = pointer +% @as(usize, @bitCast(try parseOffset(offset)));
+        at = pointer +% @as(usize, @bitCast(try parseOffset(text)));
     }
     return at;
 }
@@ -948,11 +972,12 @@ pub fn sizeOfItem(item: Item, schemas: []const *const Schema) usize {
 }
 
 /// Like `u32`, `Player` or `Item[10]`. In `buf`.
-pub fn typeOfItem(item: Item, buf: []u8) []const u8 {
+/// In `arena`, or borrowed from `item`.
+pub fn typeOfItem(arena: std.mem.Allocator, item: Item) error{OutOfMemory}![]const u8 {
     if (item.group) return "";
     const each = if (item.type.len > 0) item.type else @tagName(item.kind);
     if (item.count.len == 0) return each;
-    return std.fmt.bufPrint(buf, "{s}[{s}]", .{ each, item.count }) catch each;
+    return std.fmt.allocPrint(arena, "{s}[{s}]", .{ each, item.count });
 }
 
 /// A typed entry's type, and the schema it's in.
@@ -1633,13 +1658,14 @@ pub const Bound = struct {
 pub fn boundHotkeys(self: *const AddressList, arena: std.mem.Allocator) ![]Bound {
     var out: std.ArrayList(Bound) = .empty;
     for (self.nodes.items) |*n| {
-        for (n.hotkeys[0..n.hotkey_count], 0..) |*h, k| {
+        for (n.hotkeys.items, 0..) |*h, k| {
             const chord = h.chord orelse continue;
             const name = n.name.get();
             const id = std.mem.trim(u8, n.id.get(), " ");
-            var buf: [160]u8 = undefined;
             const entry = if (name.len > 0) name else "(no description)";
-            const label = try arena.dupe(u8, hotkeyLabel(&buf, entry, h.action, h.value.get()));
+            var label_text: std.Io.Writer.Allocating = .init(arena);
+            writeHotkeyLabel(&label_text.writer, entry, h.action, h.value.get()) catch return error.OutOfMemory;
+            const label = label_text.written();
             const does = if (std.mem.startsWith(u8, label, entry) and label.len > entry.len + 2) label[entry.len + 2 ..] else label;
             try out.append(arena, .{
                 .node = n.key,
@@ -1655,26 +1681,31 @@ pub fn boundHotkeys(self: *const AddressList, arena: std.mem.Allocator) ![]Bound
     return out.items;
 }
 
-/// Like `Mira: set 999999` or `Mira: hold`. In `buf`.
+/// Like `Mira: set 999999` or `Mira: hold`. In `buf`, cut short for showing.
 pub fn hotkeyLabel(buf: []u8, name: []const u8, action: Action, value: []const u8) []const u8 {
+    var w: std.Io.Writer = .fixed(buf);
+    writeHotkeyLabel(&w, name, action, value) catch {};
+    return w.buffered();
+}
+
+pub fn writeHotkeyLabel(w: *std.Io.Writer, name: []const u8, action: Action, value: []const u8) std.Io.Writer.Error!void {
     const v = std.mem.trim(u8, value, " ");
-    const out = switch (action) {
-        .toggle_hold => std.fmt.bufPrint(buf, "{s}: hold or let go", .{name}),
-        .hold => std.fmt.bufPrint(buf, "{s}: hold", .{name}),
-        .release => std.fmt.bufPrint(buf, "{s}: let go", .{name}),
-        .set => std.fmt.bufPrint(buf, "{s}: set {s}", .{ name, v }),
-        .increase => std.fmt.bufPrint(buf, "{s}: increase by {s}", .{ name, v }),
-        .decrease => std.fmt.bufPrint(buf, "{s}: decrease by {s}", .{ name, v }),
-    };
-    return out catch name;
+    switch (action) {
+        .toggle_hold => try w.print("{s}: hold or let go", .{name}),
+        .hold => try w.print("{s}: hold", .{name}),
+        .release => try w.print("{s}: let go", .{name}),
+        .set => try w.print("{s}: set {s}", .{ name, v }),
+        .increase => try w.print("{s}: increase by {s}", .{ name, v }),
+        .decrease => try w.print("{s}: decrease by {s}", .{ name, v }),
+    }
 }
 
 /// Does what entry `node`'s hotkey `index` does, like its keys were pressed.
 pub fn pressHotkey(self: *AddressList, node: u64, index: usize) void {
     const i = self.indexOfKey(node) orelse return;
     const n = &self.nodes.items[i];
-    if (index >= n.hotkey_count) return;
-    const h = n.hotkeys[index];
+    if (index >= n.hotkeys.items.len) return;
+    const h = n.hotkeys.items[index];
     self.act(i, h.action, h.value.get());
 }
 
@@ -1857,24 +1888,30 @@ fn parentRow(self: *const AddressList, k: usize) ?usize {
 }
 
 /// Like `Player.items[3].count`, from the entry it's in.
+/// In `buf`, cut short for showing.
 fn rowPath(self: *const AddressList, k: usize, buf: []u8) []const u8 {
+    var w: std.Io.Writer = .fixed(buf);
+    self.writeRowPath(&w, k) catch {};
+    return w.buffered();
+}
+
+/// Like `bag.items[1].weight`.
+fn writeRowPath(self: *const AddressList, w: *std.Io.Writer, k: usize) std.Io.Writer.Error!void {
     const node = &self.nodes.items[self.row_nodes.items[k]];
     var chain: [StructRows.max_depth + 1]usize = undefined;
     chain[0] = k;
     var n: usize = 1;
     while (n < chain.len) : (n += 1) chain[n] = self.parentRow(chain[n - 1]) orelse break;
-    var w: std.Io.Writer = .fixed(buf);
-    w.writeAll(node.name.get()) catch {};
+    try w.writeAll(node.name.get());
     var j = n;
     while (j > 0) {
         j -= 1;
         const r = self.rows.items[chain[j]];
         switch (r.kind) {
-            .element => w.print("[{d}]", .{r.index}) catch {},
-            else => w.print(".{s}", .{r.name}) catch {},
+            .element => try w.print("[{d}]", .{r.index}),
+            else => try w.print(".{s}", .{r.name}),
         }
     }
-    return w.buffered();
 }
 
 /// Whether getting to `rows[k]` goes through a pointer, so it's not a fixed offset from its entry.
@@ -1893,17 +1930,24 @@ pub fn addRow(self: *AddressList, k: usize) !void {
     const owner = self.nodes.items[i];
     const address = row.address orelse return error.NoAddress;
     var node: Node = .{ .key = self.newKey(), .depth = owner.depth };
-    var buf: [128]u8 = undefined;
-    node.name.set(self.rowPath(k, &buf));
+    errdefer self.freeNode(&node);
+    const gpa = self.allocator;
+    {
+        var path: std.Io.Writer.Allocating = .init(gpa);
+        defer path.deinit();
+        self.writeRowPath(&path.writer, k) catch return error.OutOfMemory;
+        try node.name.set(gpa, path.written());
+    }
 
+    var buf: [describe_len]u8 = undefined;
     const base = if (self.baseGroup(i) != null) self.baseOf(i) catch null else null;
-    if (base != null and owner.offset_count == 0 and !self.throughPointer(k)) {
+    if (base != null and owner.offsets.items.len == 0 and !self.throughPointer(k)) {
         const b = base.?;
         const text = if (address >= b) std.fmt.bufPrint(&buf, "+0x{x}", .{address - b}) else std.fmt.bufPrint(&buf, "-0x{x}", .{b - address});
-        node.address.set(text catch "");
+        try node.address.set(gpa, text catch "");
     } else {
         const text = self.symbols.describe(address, &buf) orelse (std.fmt.bufPrint(&buf, "0x{x}", .{address}) catch "");
-        node.address.set(text);
+        try node.address.set(gpa, text);
     }
 
     if (row.type) |t| {
@@ -1918,8 +1962,9 @@ pub fn addRow(self: *AddressList, k: usize) !void {
             if (row.kind == .bits) node.bits = .{ .shift = @intCast(row.index), .width = @intCast(row.width) };
             if (node.kind.size() == null) node.length = @intCast(std.math.clamp(row.size, 1, max_len));
         } else {
-            var type_buf: [128]u8 = undefined;
-            node.type.set(std.fmt.bufPrint(&type_buf, "{f}", .{t}) catch return error.InvalidType);
+            const text = try std.fmt.allocPrint(gpa, "{f}", .{t});
+            defer gpa.free(text);
+            try node.type.set(gpa, text);
         }
     } else {
         node.kind = owner.kind;
@@ -1964,7 +2009,7 @@ fn copyNode(self: *AddressList, w: *std.Io.Writer, i: usize, addresses_only: boo
     try w.writeAll(n.name.get());
     if (n.group) return;
     try w.print("\t{s}", .{n.address.get()});
-    for (n.offsets[0..n.offset_count]) |*o| try w.print(" [{s}]", .{o.get()});
+    for (n.offsets.items) |*o| try w.print(" [{s}]", .{o.get()});
     var text: [max_text]u8 = undefined;
     const value: []const u8 = if (n.array()) "" else if (where) |at| self.nodeValue(i, at, &text) orelse "??" else "??";
     var type_buf: [160]u8 = undefined;
@@ -1980,11 +2025,11 @@ fn copyRow(self: *AddressList, w: *std.Io.Writer, k: usize, addresses_only: bool
         if (row.address) |at| try w.print("0x{x}", .{at}) else try w.writeAll("??");
         return;
     }
-    var path: [128]u8 = undefined;
     var text: [max_text]u8 = undefined;
     const node = &self.nodes.items[self.row_nodes.items[k]];
     var type_buf: [128]u8 = undefined;
-    try w.print("{s}\t0x{x}\t{s}\t{s}", .{ self.rowPath(k, &path), row.address orelse 0, rowType(row, node, &type_buf), self.rowValue(k, &text) });
+    try self.writeRowPath(w, k);
+    try w.print("\t0x{x}\t{s}\t{s}", .{ row.address orelse 0, rowType(row, node, &type_buf), self.rowValue(k, &text) });
 }
 
 /// Like `Player*`, or the entry's kind for rows of plain arrays. In `buf`.
@@ -2022,23 +2067,23 @@ pub fn paste(self: *AddressList, text: []const u8) usize {
                 // `copy` writes pointer offsets after the address, as ` [x]`
                 const expression = std.mem.trim(u8, field[0 .. std.mem.indexOf(u8, field, " [") orelse field.len], " ");
                 if (AddressBar.parseAddress(self.symbols, expression)) |_| {
-                    node.address.set(expression);
+                    self.setText(&node.address, expression);
                     var offsets = std.mem.tokenizeAny(u8, field[expression.len..], " []");
-                    while (offsets.next()) |o| {
-                        if (node.offset_count == max_offsets) break;
-                        node.offsets[node.offset_count].set(o);
-                        node.offset_count += 1;
-                    }
+                    while (offsets.next()) |o| self.addOffset(&node, o) catch break;
                     found = true;
-                } else |_| node.name.set(field);
+                } else |_| self.setText(&node.name, field);
                 continue;
             }
             for (std.enums.values(Kind)) |k| {
                 if (std.mem.eql(u8, k.label(), field)) node.kind = k;
             }
         }
-        if (!found) continue;
+        if (!found) {
+            self.freeNode(&node);
+            continue;
+        }
         self.insert(node) catch |err| {
+            self.freeNode(&node);
             self.fail("paste", err);
             break;
         };
@@ -2361,7 +2406,7 @@ pub fn drawEntry(self: *AddressList) bool {
     };
     const node = &self.nodes.items[i];
     ui.setNextItemWidth(ui.fill);
-    if (ui.inputTextHint("##name", "Description", &node.name.buf)) self.dirty = true;
+    if (ui.inputTextGrow("##name", &node.name, self.allocator, .{ .hint = "Description" })) self.dirty = true;
     if (self.drawGroupChoice(i)) return true;
 
     const in_based = self.baseGroup(i) != null;
@@ -2372,37 +2417,31 @@ pub fn drawEntry(self: *AddressList) bool {
     else
         "Address: 0x7FF6A0001000 or kai.exe+0x1234";
     ui.setNextItemWidth(ui.fill);
-    if (ui.inputTextHint("##address", address_hint, &node.address.buf)) self.changedWhere(node);
+    if (ui.inputTextGrow("##address", &node.address, self.allocator, .{ .hint = address_hint })) self.changedWhere(node);
     ui.setNextItemWidth(ui.fill);
-    if (ui.inputTextHint("##id", if (node.group) "Id for code, like player" else "Id for code, like player.health", &node.id.buf)) self.dirty = true;
+    if (ui.inputTextGrow("##id", &node.id, self.allocator, .{ .hint = if (node.group) "Id for code, like player" else "Id for code, like player.health" })) self.dirty = true;
     if (!node.group) self.drawType(node);
     if (!node.group) self.drawBits(node);
 
     ui.separatorText("Pointer offsets");
     var removed: ?usize = null;
-    for (node.offsets[0..node.offset_count], 0..) |*offset, k| {
+    for (node.offsets.items, 0..) |*offset, k| {
         const scope = ui.id(@as(i32, @intCast(k)));
         defer scope.end();
         ui.setNextItemWidth(110);
-        if (ui.inputTextHint("##offset", "0x10", &offset.buf)) self.changedWhere(node);
+        if (ui.inputTextGrow("##offset", offset, self.allocator, .{ .hint = "0x10" })) self.changedWhere(node);
         ui.sameLine();
         if (ui.smallButton("x")) removed = k;
     }
     if (removed) |k| {
-        std.mem.copyForwards(Text(16), node.offsets[k .. node.offset_count - 1], node.offsets[k + 1 .. node.offset_count]);
-        node.offset_count -= 1;
-        node.offsets[node.offset_count] = .{};
+        var gone = node.offsets.orderedRemove(k);
+        gone.deinit(self.allocator);
         self.changedWhere(node);
     }
-    {
-        const disabled = ui.disabled(node.offset_count == max_offsets);
-        defer disabled.end();
-        if (ui.button("Add offset")) {
-            node.offset_count += 1;
-            self.changedWhere(node);
-        }
-        ui.tooltip("Follow another pointer", .{});
+    if (ui.button("Add offset")) {
+        if (node.offsets.append(self.allocator, .{})) |_| self.changedWhere(node) else |err| self.fail("add an offset", err);
     }
+    ui.tooltip("Follow another pointer", .{});
     ui.sameLine();
     if (node.group and !node.hasAddress()) {
         ui.textDisabled("Just a folder", .{});
@@ -2463,7 +2502,7 @@ fn drawChoices(self: *AddressList, node: *Node) void {
     ui.tooltip("Show just the label, not the number too. Numbers that aren't in the list still show", .{});
     ui.sameLine();
     ui.setNextItemWidth(ui.fill);
-    if (ui.inputTextHint("##choices_from", "Or another entry's, by its id", &node.choices_from.buf)) self.dirty = true;
+    if (ui.inputTextGrow("##choices_from", &node.choices_from, self.allocator, .{ .hint = "Or another entry's, by its id" })) self.dirty = true;
     if (self.choices_key != node.key) self.fillChoicesText(node);
     if (self.choices_text.len == 0) return;
     ui.textDisabled("One per line, like 0: Off", .{});
@@ -2517,7 +2556,7 @@ fn drawHotkeys(self: *AddressList, node: *Node) void {
         self.hotkeys_key = node.key;
     }
     defer self.listen_hotkey = null;
-    if (node.hotkey_count == 0) {
+    if (node.hotkeys.items.len == 0) {
         ui.textDisabled("None yet. Right-click here to add one", .{});
         return;
     }
@@ -2527,9 +2566,9 @@ fn drawHotkeys(self: *AddressList, node: *Node) void {
     ui.tableColumnWith("Does", .{ .fixed = true, .width = 130 });
     ui.tableColumnWith("Value", .{ .stretch = true, .width = 1 });
     ui.tableHeaders();
-    var picking = self.hotkey_picked.begin(node.hotkey_count, ui.Selection.Indices{}, .{});
+    var picking = self.hotkey_picked.begin(node.hotkeys.items.len, ui.Selection.Indices{}, .{});
     defer picking.end();
-    for (node.hotkeys[0..node.hotkey_count], 0..) |*h, k| {
+    for (node.hotkeys.items, 0..) |*h, k| {
         const scope = ui.id(@as(i32, @intCast(k)));
         defer scope.end();
         ui.tableNextRow();
@@ -2548,7 +2587,7 @@ fn drawHotkeys(self: *AddressList, node: *Node) void {
         _ = ui.tableNextColumn();
         if (!h.action.takesValue()) continue;
         ui.setNextItemWidth(ui.fill);
-        if (ui.inputTextHint("##value", "A number, or a choice for Set to", &h.value.buf)) self.dirty = true;
+        if (ui.inputTextGrow("##value", &h.value, self.allocator, .{ .hint = "A number, or a choice for Set to" })) self.dirty = true;
     }
 }
 
@@ -2556,8 +2595,7 @@ fn drawHotkeys(self: *AddressList, node: *Node) void {
 pub fn entryCommands(self: *AddressList, menu: *ui.Commands) void {
     const i = self.selectedIndex();
     const node: ?*Node = if (i) |n| &self.nodes.items[n] else null;
-    const room = if (node) |n| n.hotkey_count < max_hotkeys else false;
-    if (menu.item(.{ .label = "Add hotkey", .enabled = room, .tooltip = "Then press its keys. Bound in the game's keybinds, so they work with the workbench closed" })) self.addHotkey(i.?, .{});
+    if (menu.item(.{ .label = "Add hotkey", .enabled = node != null, .tooltip = "Then press its keys. Bound in the game's keybinds, so they work with the workbench closed" })) self.addHotkey(i.?, .{});
     const picked = if (node) |n| self.pickedHotkey(n) else null;
     if (menu.item(.{ .label = "Remove hotkey", .enabled = picked != null })) self.removeHotkey(i.?, picked.?);
 }
@@ -2565,23 +2603,25 @@ pub fn entryCommands(self: *AddressList, menu: *ui.Commands) void {
 /// Listens for its keys if it has none.
 pub fn addHotkey(self: *AddressList, i: usize, hotkey: Hotkey) void {
     const node = &self.nodes.items[i];
-    if (node.hotkey_count == max_hotkeys) return;
-    const k = node.hotkey_count;
-    node.hotkeys[k] = .{ .chord = hotkey.chord, .action = hotkey.action };
-    node.hotkeys[k].value.set(hotkey.value);
-    node.hotkey_count += 1;
+    const k = node.hotkeys.items.len;
+    self.appendHotkey(node, hotkey) catch |err| return self.fail("add a hotkey", err);
     self.hotkeys_key = node.key;
     self.hotkey_picked.only(k);
     if (hotkey.chord == null) self.listen_hotkey = k;
     self.dirty = true;
 }
 
+fn appendHotkey(self: *AddressList, node: *Node, hotkey: Hotkey) !void {
+    var value: EditText = try .init(self.allocator, hotkey.value);
+    errdefer value.deinit(self.allocator);
+    try node.hotkeys.append(self.allocator, .{ .chord = hotkey.chord, .action = hotkey.action, .value = value });
+}
+
 pub fn removeHotkey(self: *AddressList, i: usize, k: usize) void {
     const node = &self.nodes.items[i];
-    if (k >= node.hotkey_count) return;
-    std.mem.copyForwards(NodeKey, node.hotkeys[k .. node.hotkey_count - 1], node.hotkeys[k + 1 .. node.hotkey_count]);
-    node.hotkey_count -= 1;
-    node.hotkeys[node.hotkey_count] = .{};
+    if (k >= node.hotkeys.items.len) return;
+    var gone = node.hotkeys.orderedRemove(k);
+    gone.value.deinit(self.allocator);
     self.hotkey_picked.clear();
     self.dirty = true;
 }
@@ -2589,7 +2629,7 @@ pub fn removeHotkey(self: *AddressList, i: usize, k: usize) void {
 fn pickedHotkey(self: *const AddressList, node: *const Node) ?usize {
     if (self.hotkeys_key != node.key) return null;
     const k = self.hotkey_picked.focused() orelse return null;
-    return if (k < node.hotkey_count) @intCast(k) else null;
+    return if (k < node.hotkeys.items.len) @intCast(k) else null;
 }
 
 /// Where it is moved, so what was held there isn't put back.
@@ -2618,9 +2658,9 @@ fn drawType(self: *AddressList, node: *Node) void {
     if (ui.combo("##kind", &current, self.choices.items)) {
         if (current < kind_labels.len) {
             node.kind = @fromBackingInt(@intCast(current));
-            node.type.set("");
+            self.setText(&node.type, "");
         } else if (current < kind_labels.len + self.type_names.items.len) {
-            node.type.set(self.type_names.items[current - kind_labels.len]);
+            self.setText(&node.type, self.type_names.items[current - kind_labels.len]);
         }
         self.changedWhere(node);
     }
@@ -2638,7 +2678,7 @@ fn drawType(self: *AddressList, node: *Node) void {
     }
     ui.sameLine();
     ui.setNextItemWidth(ui.fill);
-    if (ui.inputTextHint("##count", "Blank, 10, or +0x54 to read it (as u16 for other sizes)", &node.count.buf)) self.changedWhere(node);
+    if (ui.inputTextGrow("##count", &node.count, self.allocator, .{ .hint = "Blank, 10, or +0x54 to read it (as u16 for other sizes)" })) self.changedWhere(node);
     ui.tooltip("Makes it an array. A number, or where to read the count from. That's 4 bytes unless it ends in as u8, as u16, as u64 or a signed one like as i32", .{});
 }
 
@@ -2690,12 +2730,13 @@ const tests = struct {
 
     fn setAddress(self: *AddressList, i: usize, address: usize) void {
         var buf: [32]u8 = undefined;
-        self.nodes.items[i].address.set(std.fmt.bufPrint(&buf, "0x{x}", .{address}) catch unreachable);
+        self.nodes.items[i].address.set(self.allocator, std.fmt.bufPrint(&buf, "0x{x}", .{address}) catch unreachable) catch unreachable;
     }
 
     fn setOffsets(node: *Node, offsets: []const []const u8) void {
-        for (offsets, 0..) |o, k| node.offsets[k].set(o);
-        node.offset_count = @intCast(offsets.len);
+        for (node.offsets.items) |*o| o.deinit(testing.allocator);
+        node.offsets.clearRetainingCapacity();
+        for (offsets) |o| node.offsets.append(testing.allocator, EditText.init(testing.allocator, o) catch unreachable) catch unreachable;
     }
 
     test "pointer chains" {
@@ -2872,8 +2913,8 @@ const tests = struct {
         const text = try std.fmt.bufPrint(&buf, "Health\t0x{x} [10]\t2 Bytes\t5\n0x{x}\nnot an address", .{ @intFromPtr(&a), @intFromPtr(&a) });
         try testing.expectEqual(2, l.paste(text));
         try testing.expectEqualStrings("Health", l.nodes.items[0].name.get());
-        try testing.expectEqual(1, l.nodes.items[0].offset_count);
-        try testing.expectEqualStrings("10", l.nodes.items[0].offsets[0].get());
+        try testing.expectEqual(1, l.nodes.items[0].offsets.items.len);
+        try testing.expectEqualStrings("10", l.nodes.items[0].offsets.items[0].get());
         try testing.expectEqual(.two_bytes, l.nodes.items[0].kind);
         try testing.expectEqual(@intFromPtr(&a), l.targetOf(1).?.address);
 
@@ -2902,8 +2943,8 @@ const tests = struct {
         try testing.expectEqual(2, back.nodes.items.len);
         try testing.expectEqualStrings("0x1000", back.nodes.items[1].address.get());
         try testing.expectEqual(.float, back.nodes.items[1].kind);
-        try testing.expectEqual(2, back.nodes.items[1].offset_count);
-        try testing.expectEqualStrings("-0x4", back.nodes.items[1].offsets[1].get());
+        try testing.expectEqual(2, back.nodes.items[1].offsets.items.len);
+        try testing.expectEqualStrings("-0x4", back.nodes.items[1].offsets.items[1].get());
         try testing.expect(!back.nodes.items[1].hold);
 
         try back.load(&.{ .{ .name = "a", .depth = 3 }, .{ .name = "b", .depth = 2, .address = "0x1" } });
@@ -2954,6 +2995,25 @@ const tests = struct {
 
     fn hex(arena: std.mem.Allocator, address: usize) []const u8 {
         return std.fmt.allocPrint(arena, "0x{x}", .{address}) catch unreachable;
+    }
+
+    test "as many offsets as it takes, and text of any length" {
+        var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+        defer arena_state.deinit();
+        const a = arena_state.allocator();
+        // Points at itself, so every offset of 0 lands back on it
+        var loop: usize = undefined;
+        loop = @intFromPtr(&loop);
+        const offsets: [20][]const u8 = @splat("0");
+        const name: [500]u8 = @splat('n');
+        var l = list();
+        defer l.deinit();
+        try l.load(&.{.{ .name = &name, .address = hex(a, @intFromPtr(&loop)), .offsets = &offsets }});
+        try testing.expectEqual(20, l.nodes.items[0].offsets.items.len);
+        try testing.expectEqual(@intFromPtr(&loop), try l.resolve(0));
+        const saved = try l.items(a);
+        try testing.expectEqual(20, saved[0].offsets.len);
+        try testing.expectEqualStrings(&name, saved[0].name);
     }
 
     test "relative addresses" {
@@ -3016,9 +3076,8 @@ const tests = struct {
         try testing.expectEqualStrings("[([[([game+0x10]+0x8)+0x20]+0x0]-0x4)+4]+0x10", try locationOf(all, 3, a));
         try testing.expectEqualStrings("0x1000", try locationOf(all, 4, a));
         try testing.expectEqualStrings("-4", try locationOf(all, 5, a));
-        var buf: [32]u8 = undefined;
-        try testing.expectEqualStrings("Item[+0x4]", typeOfItem(.{ .type = "Item", .count = "+0x4" }, &buf));
-        try testing.expectEqualStrings("two_bytes", typeOfItem(.{ .kind = .two_bytes }, &buf));
+        try testing.expectEqualStrings("Item[+0x4]", try typeOfItem(a, .{ .type = "Item", .count = "+0x4" }));
+        try testing.expectEqualStrings("two_bytes", try typeOfItem(a, .{ .kind = .two_bytes }));
         try testing.expectEqual(20, sizeOfItem(.{ .kind = .two_bytes, .count = "10" }, &.{}));
     }
 
@@ -3244,7 +3303,7 @@ const tests = struct {
         try testing.expectEqual(1, l.holds.items.len);
 
         // Retyping it lets go
-        l.nodes.items[1].type.set("Bag");
+        try l.nodes.items[1].type.set(testing.allocator, "Bag");
         l.changedWhere(&l.nodes.items[1]);
         try testing.expectEqual(0, l.holds.items.len);
     }
@@ -3287,7 +3346,7 @@ const tests = struct {
         try testing.expectEqualStrings("u12 isn't a count type. It's u8, u16, u32, u64, i8, i16, i32 or i64", countProblem(&l.nodes.items[7], error.UnknownCountType, &buf));
         var type_buf: [64]u8 = undefined;
         try testing.expectEqualStrings("4 Bytes[+2 as u16]", typeLabel(&l.nodes.items[2], &type_buf));
-        try testing.expectEqualStrings("Item[+0x54 as u16]", typeOfItem(.{ .type = "Item", .count = "+0x54 as u16" }, &type_buf));
+        try testing.expectEqualStrings("Item[+0x54 as u16]", try typeOfItem(arena.allocator(), .{ .type = "Item", .count = "+0x54 as u16" }));
         try testing.expectEqual(4, sizeOfItem(.{ .count = "+0x54 as u16" }, &.{}));
         try testing.expectEqual(4, sizeOfItem(.{ .count = "10 as u16" }, &.{}));
 
@@ -3549,8 +3608,8 @@ const tests = struct {
         l.pressHotkey(12345, 0);
 
         l.removeHotkey(0, 0);
-        try testing.expectEqual(3, l.nodes.items[0].hotkey_count);
-        try testing.expectEqual(.increase, l.nodes.items[0].hotkeys[0].action);
+        try testing.expectEqual(3, l.nodes.items[0].hotkeys.items.len);
+        try testing.expectEqual(.increase, l.nodes.items[0].hotkeys.items[0].action);
     }
 
     test "save and load bits, choices and hotkeys" {

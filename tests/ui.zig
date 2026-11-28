@@ -169,6 +169,33 @@ const tests = struct {
         try testing.expectEqual(.f7, S.chord.?.key);
     }
 
+    test "growing text input takes as much as is typed" {
+        bind();
+        const S = struct {
+            var frames: usize = 0;
+            var text: ui.EditText = .{};
+            var changes: usize = 0;
+
+            fn run() !void {
+                const io = c.ImGui_GetIO();
+                if (frames >= 2 and frames < 6) {
+                    const chunk: [100:0]u8 = @splat('x');
+                    c.ImGuiIO_AddInputCharactersUTF8(io, &chunk);
+                }
+                if (ui.window("grow", .{ .size = .{ 300, 200 } })) |win| {
+                    defer win.end();
+                    if (frames == 0) c.ImGui_SetKeyboardFocusHere();
+                    if (ui.inputTextGrow("##grow", &text, testing.allocator, .{ .hint = "Type" })) changes += 1;
+                }
+                frames += 1;
+            }
+        };
+        defer S.text.deinit(testing.allocator);
+        try renderFrames(10, S);
+        try testing.expectEqual(400, S.text.get().len);
+        try testing.expect(S.changes > 0);
+    }
+
     test "toasts stay on top and close on click" {
         bind();
         const S = struct {

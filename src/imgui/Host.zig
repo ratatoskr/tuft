@@ -60,6 +60,7 @@ pub fn requestCapture(self: *Host, point: capture.Point) void {
 
 /// Outside windows go first, while the renderer can still free their swap chains.
 pub fn deinit(self: *Host) void {
+    self.toasts.deinit();
     self.stopIme();
     const context = self.context orelse return;
     c.ImGui_SetCurrentContext(context);

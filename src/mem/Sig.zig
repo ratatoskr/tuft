@@ -25,8 +25,6 @@ first_match: bool = false,
 /// Which copies it may be found in, `Sources(Live, Disk)` in text. Null leaves it to whoever looks.
 sources: ?Sources = null,
 
-pub const max_len = 256;
-
 /// In ZON it's `.rip`, `.follow`, `.rel32` or `.{ .offset = n }`.
 pub const Step = union(enum) {
     offset: isize,
@@ -46,6 +44,11 @@ pub fn locate(self: Sig, name: []const u8) Address {
 /// Live memory first, then each allowed copy. Stops at multiple matches too, since that's a loose sig.
 pub fn locateWith(self: Sig, name: []const u8, allowed: Sources) Address {
     const use = self.sources orelse allowed;
+    // The copy it was found in last time first, so a hooked sig doesn't rescan live memory every run
+    if (self.cachedSource(use)) |source| {
+        const match = self.findIn(name, source);
+        if (match.unwrap()) |at| return self.fromIn(name, at, source) else |_| {}
+    }
     var last: ?Address = null;
     for (AddressSource.order) |source| {
         if (!use.has(source)) continue;
@@ -67,6 +70,21 @@ pub fn locateWith(self: Sig, name: []const u8, allowed: Sources) Address {
     return last orelse .fail(error.PatternNotFound);
 }
 
+/// A copy past live that the scan cache says it was found in, if `use` allows it.
+fn cachedSource(self: Sig, use: Sources) ?AddressSource {
+    var stack: [1024]u8 = undefined;
+    var first: std.heap.BufferFirstAllocator = .init(&stack, std.heap.smp_allocator);
+    const gpa = first.allocator();
+    const p = root.pattern.parseAlloc(gpa, self.pattern) catch return null;
+    defer gpa.free(p);
+    const formatted = root.scans.formatAlloc(gpa, p) catch return null;
+    defer gpa.free(formatted);
+    // Copies scan the same range, which is `.text` for whole-image sigs
+    const r = (if (self.section.len == 0) self.codeRange() else self.range()) catch return null;
+    const hit = root.scans.cached(r.start, r.len, formatted, self.first_match) orelse return null;
+    return if (hit.source != .live and use.has(hit.source)) hit.source else null;
+}
+
 /// Just the match, before `resolve`, in live memory.
 pub fn find(self: Sig, name: []const u8) Address {
     return self.findIn(name, .live);
@@ -75,8 +93,11 @@ pub fn find(self: Sig, name: []const u8) Address {
 /// Just the match, before `resolve`, in one copy. Whole-image sigs look in `.text`, copies only have code.
 pub fn findIn(self: Sig, name: []const u8, source: AddressSource) Address {
     const r = (if (source != .live and self.section.len == 0) self.codeRange() else self.range()) catch |err| return failed(name, err);
-    var buf: [max_len]?u8 = undefined;
-    const p = root.pattern.parseInto(self.pattern, &buf) catch |err| return failed(name, err);
+    var stack: [1024]u8 = undefined;
+    var first: std.heap.BufferFirstAllocator = .init(&stack, std.heap.smp_allocator);
+    const gpa = first.allocator();
+    const p = root.pattern.parseAlloc(gpa, self.pattern) catch |err| return failed(name, err);
+    defer gpa.free(p);
     // Misses are only debug, since another copy may have it and callers say what failed
     const copy = r.from(source);
     return if (self.first_match) copy.scanPatternFirst(name, p) else copy.scanPattern(name, p);

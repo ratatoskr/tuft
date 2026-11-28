@@ -113,6 +113,7 @@ pub fn destroy(self: *AppWindow) void {
     win.CloseHandle(self.wake);
     self.allocator.free(self.title);
     if (self.ini_path) |p| self.allocator.free(p);
+    self.toasts.deinit();
     self.allocator.destroy(self);
 }
 

@@ -209,6 +209,7 @@ pub fn build(b: *std.Build) void {
     const imgui_c = imgui.cApi(b, target, optimize, vulkan_headers);
     b.modules.put(b.graph.arena, "tuft_imgui_c", imgui_c) catch @panic("OOM");
     const ui_mod = ctx.addModule("ui", &.{
+        .{ .name = "tuft_text", .module = text },
         .{ .name = "tuft_imgui_c", .module = imgui_c },
         .{ .name = "tuft_arch", .module = arch },
         .{ .name = "tuft_input", .module = input },

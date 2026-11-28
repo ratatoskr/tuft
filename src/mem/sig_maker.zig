@@ -9,6 +9,7 @@ const Atomic = tuft_arch.atomic.Value;
 
 const pattern = @import("pattern.zig");
 const Sig = @import("Sig.zig");
+const scans = @import("scans.zig");
 const Memory = @import("Memory.zig");
 const Module = @import("root.zig").Module;
 const originals = @import("originals.zig");
@@ -18,7 +19,8 @@ const is64 = @sizeOf(usize) == 8;
 pub const Options = struct {
     /// Shorter ones match by chance after an update.
     min_len: usize = 3,
-    max_len: usize = Sig.max_len,
+    /// Longest it tries, since longer ones break sooner.
+    max_len: usize = 256,
     /// Code pointing at it to try. Past that, the first ones found.
     max_refs: usize = 2000,
     cancel: ?*const Atomic(bool) = null,
@@ -51,12 +53,12 @@ pub fn make(arena: std.mem.Allocator, code: []const u8, base: usize, target: usi
     for (code) |b| counts[b] +|= 1;
     var hits: std.ArrayList(usize) = .empty;
     var best: ?Found = null;
-    var buf: [Sig.max_len]?u8 = undefined;
+    const buf = try arena.alloc(?u8, options.max_len);
     for (starts.items) |start| {
         if (cancelled(options)) return error.Canceled;
         if (options.progress) |p| _ = p.fetchAdd(1, .monotonic);
-        const limit = if (best) |b| b.pattern.len else @min(options.max_len, buf.len) + 1;
-        const len = try grow(arena, code, &counts, start, options, limit, &buf, &hits) orelse continue;
+        const limit = if (best) |b| b.pattern.len else options.max_len + 1;
+        const len = try grow(arena, code, &counts, start, options, limit, buf, &hits) orelse continue;
         const direct = base + start == target;
         best = .{
             .pattern = try arena.dupe(?u8, buf[0..len]),
@@ -204,13 +206,12 @@ pub fn forAddress(arena: std.mem.Allocator, target: usize, options: Options) !?M
         Memory.local.direct(text.start, text.len) orelse return error.Unreadable;
     const found = try make(arena, code, text.start, target, options) orelse return null;
 
-    var text_buf: [Sig.max_len * 3]u8 = undefined;
     var name_buf: [260]u8 = undefined;
     const main = module.base == Module.main().base;
     const name = if (main) null else try arena.dupe(u8, module.name(&name_buf) orelse return error.ModuleNotFound);
     return .{
         .sig = .{
-            .pattern = try arena.dupe(u8, format(found.pattern, &text_buf)),
+            .pattern = try scans.formatAlloc(arena, found.pattern),
             .resolve = found.resolve,
             .module = name,
         },
@@ -218,14 +219,8 @@ pub fn forAddress(arena: std.mem.Allocator, target: usize, options: Options) !?M
     };
 }
 
-pub fn format(p: pattern.Pattern, buf: []u8) []const u8 {
-    var w: std.Io.Writer = .fixed(buf);
-    for (p, 0..) |b, i| {
-        if (i != 0) w.writeByte(' ') catch break;
-        if (b) |v| w.print("{X:0>2}", .{v}) catch break else w.writeAll("??") catch break;
-    }
-    return w.buffered();
-}
+pub const format = scans.format;
+pub const formatAlloc = scans.formatAlloc;
 
 const tests = struct {
     const testing = std.testing;

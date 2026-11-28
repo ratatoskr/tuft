@@ -43,6 +43,17 @@ pub fn parseInto(signature: []const u8, buf: []?u8) ![]?u8 {
     return buf[0..n];
 }
 
+/// As long as it needs, freed with `gpa.free`.
+pub fn parseAlloc(gpa: std.mem.Allocator, signature: []const u8) ![]?u8 {
+    const buf = try gpa.alloc(?u8, signature.len);
+    errdefer gpa.free(buf);
+    const p = try parseInto(signature, buf);
+    if (gpa.resize(buf, p.len)) return buf[0..p.len];
+    const exact = try gpa.dupe(?u8, p);
+    gpa.free(buf);
+    return exact;
+}
+
 pub fn find(hay: []const u8, p: Pattern, from: usize) ?usize {
     if (p.len == 0 or from > hay.len or p.len > hay.len - from) return null;
 

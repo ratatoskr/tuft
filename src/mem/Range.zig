@@ -97,16 +97,27 @@ pub fn Generic(comptime Hooks: type) type {
 
         fn run(self: Range, name: []const u8, p: Pattern, unique: bool) Address {
             const started = sys.clock.nanos();
+            // On the stack unless it's long
+            var stack: [1024]u8 = undefined;
+            var first: std.heap.BufferFirstAllocator = .init(&stack, std.heap.smp_allocator);
+            const gpa = first.allocator();
+            const formatted = scans.formatAlloc(gpa, p) catch |err| return self.result(err);
+            defer gpa.free(formatted);
             var outcome: scans.Outcome = .not_found;
             var found: usize = 0;
-            self.search(p, unique, &outcome, &found) catch |err| {
-                log.debug("{s}: {t}", .{ name, err });
-                return self.result(err);
-            };
-            var text: [768]u8 = undefined;
+            if (self.cachedAt(p, formatted, unique)) |at| {
+                outcome = .found;
+                found = at;
+            } else {
+                self.search(p, unique, &outcome, &found) catch |err| {
+                    log.debug("{s}: {t}", .{ name, err });
+                    return self.result(err);
+                };
+                if (outcome == .found and self.cacheable()) scans.remember(self.start, self.len, formatted, !unique, .{ .at = found, .source = self.source });
+            }
             scans.report(&.{
                 .name = name,
-                .pattern = scans.format(p, &text),
+                .pattern = formatted,
                 .start = self.start,
                 .len = self.len,
                 .source = self.source,
@@ -129,6 +140,23 @@ pub fn Generic(comptime Hooks: type) type {
                     break :blk self.result(error.PatternNotUnique);
                 },
             };
+        }
+
+        /// The cache keys on where code is in this process.
+        fn cacheable(self: Range) bool {
+            return self.memory.isLocal();
+        }
+
+        /// Where it matched last time, if it still does there. One that doesn't is forgotten.
+        fn cachedAt(self: Range, p: Pattern, formatted: []const u8, unique: bool) ?usize {
+            if (!self.cacheable()) return null;
+            const hit = scans.cached(self.start, self.len, formatted, !unique) orelse return null;
+            if (hit.source != self.source) return null;
+            const hay = (self.whole() catch null) orelse return null;
+            const off = hit.at -% self.start;
+            if (off < hay.len and hay.len - off >= p.len and pattern.matches(hay[off..][0..p.len], p)) return hit.at;
+            scans.remember(self.start, self.len, formatted, !unique, null);
+            return null;
         }
 
         fn result(self: Range, value: anyerror!usize) Address {
@@ -302,4 +330,37 @@ test "scans are reported" {
     try std.testing.expectEqualStrings("C3 90", Seen.pattern_buf[0..Seen.pattern_len]);
     _ = range.scan("twice", "90 C3");
     try std.testing.expectEqual(.not_unique, Seen.last);
+}
+
+test "a cached spot is checked before scanning, and forgotten once it stops matching" {
+    const Fake = struct {
+        var hit: ?scans.Hit = null;
+        fn lookup(_: usize, _: usize, _: []const u8, _: bool) ?scans.Hit {
+            return hit;
+        }
+        fn remember(_: usize, _: usize, _: []const u8, _: bool, h: ?scans.Hit) void {
+            hit = h;
+        }
+        const cache: scans.Cache = .{ .lookup = lookup, .remember = remember };
+    };
+    const previous = scans.setCache(&Fake.cache);
+    defer _ = scans.setCache(previous);
+    const mem = [_]u8{ 0xC3, 0x00, 0x90, 0xC3, 0x01, 0x90 };
+    const base = @intFromPtr(&mem);
+    const range = Generic(address.NoHooks).fromSlice(&mem);
+    // Too loose to scan for, but a spot it matched before that still matches is taken
+    try std.testing.expectError(error.PatternNotUnique, range.scan("loose", "C3 ?? 90").unwrap());
+    Fake.hit = .{ .at = base + 3 };
+    try std.testing.expectEqual(base + 3, try range.scan("loose", "C3 ?? 90").unwrap());
+    // One that doesn't match there any more is dropped
+    Fake.hit = .{ .at = base + 1 };
+    try std.testing.expectError(error.PatternNotUnique, range.scan("loose", "C3 ?? 90").unwrap());
+    try std.testing.expectEqual(null, Fake.hit);
+    // A copy it wasn't found in isn't looked at
+    Fake.hit = .{ .at = base + 3, .source = .disk };
+    try std.testing.expectError(error.PatternNotUnique, range.scan("loose", "C3 ?? 90").unwrap());
+    // A match is remembered
+    Fake.hit = null;
+    try std.testing.expectEqual(base + 3, try range.scan("exact", "C3 01 90").unwrap());
+    try std.testing.expectEqual(base + 3, Fake.hit.?.at);
 }

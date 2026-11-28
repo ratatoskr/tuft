@@ -65,8 +65,82 @@ pub fn Text(comptime capacity: usize) type {
     };
 }
 
+/// Zero-terminated text with no limit, which grows as it's set or typed into. Owns its buffer, so it's
+/// moved, not copied; `clone` for a second one.
+pub const EditText = struct {
+    /// The text, a 0, then room. Empty till something's set.
+    buf: []u8 = &.{},
+    len: usize = 0,
+
+    pub fn init(gpa: std.mem.Allocator, s: []const u8) error{OutOfMemory}!EditText {
+        var t: EditText = .{};
+        try t.set(gpa, s);
+        return t;
+    }
+
+    pub fn deinit(self: *EditText, gpa: std.mem.Allocator) void {
+        gpa.free(self.buf);
+        self.* = .{};
+    }
+
+    pub fn clone(self: *const EditText, gpa: std.mem.Allocator) error{OutOfMemory}!EditText {
+        return init(gpa, self.get());
+    }
+
+    pub fn get(self: *const EditText) [:0]const u8 {
+        if (self.buf.len == 0) return "";
+        return self.buf[0..self.len :0];
+    }
+
+    /// Only allocates past the room it has.
+    pub fn set(self: *EditText, gpa: std.mem.Allocator, s: []const u8) error{OutOfMemory}!void {
+        try self.reserve(gpa, s.len + 1);
+        @memcpy(self.buf[0..s.len], s);
+        self.buf[s.len] = 0;
+        self.len = s.len;
+    }
+
+    /// Room for `size` bytes, its 0 included.
+    pub fn reserve(self: *EditText, gpa: std.mem.Allocator, size: usize) error{OutOfMemory}!void {
+        if (size <= self.buf.len) return;
+        const grown = @max(size, self.buf.len * 2, 16);
+        if (self.buf.len == 0) {
+            self.buf = try gpa.alloc(u8, grown);
+            self.buf[0] = 0;
+        } else {
+            self.buf = try gpa.realloc(self.buf, grown);
+        }
+    }
+
+    /// After something wrote into `buf` itself, like an input box.
+    pub fn sync(self: *EditText) void {
+        self.len = std.mem.indexOfScalar(u8, self.buf, 0) orelse self.buf.len;
+    }
+};
+
 const tests = struct {
     const testing = std.testing;
+
+    test "edit text grows, and only past its room" {
+        var t: EditText = .{};
+        defer t.deinit(testing.allocator);
+        try testing.expectEqualStrings("", t.get());
+        const long: [100]u8 = @splat('x');
+        try t.set(testing.allocator, &long);
+        try testing.expectEqualStrings(&long, t.get());
+        const room = t.buf.ptr;
+        try t.set(testing.allocator, "short");
+        try testing.expectEqualStrings("short", t.get());
+        try testing.expectEqual(room, t.buf.ptr);
+        // Typed into directly
+        @memcpy(t.buf[0..3], "abc");
+        t.buf[3] = 0;
+        t.sync();
+        try testing.expectEqualStrings("abc", t.get());
+        var copy = try t.clone(testing.allocator);
+        defer copy.deinit(testing.allocator);
+        try testing.expectEqualStrings("abc", copy.get());
+    }
 
     test "message prints, sets and cuts short" {
         var m: Message(8) = .init("{d} apples", .{3});

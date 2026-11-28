@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const math = @import("tuft_math");
+pub const EditText = @import("tuft_text").EditText;
 
 /// The dear_bindings C API.
 pub const c = @import("tuft_imgui_c");
@@ -671,6 +672,38 @@ pub fn inputTextWith(label: [:0]const u8, buffer: []u8, options: InputTextOption
     if (options.hint) |h| return raw("ImGui_InputTextWithHint")(str(label), str(h), @ptrCast(buffer.ptr), buffer.len, f);
     return raw("ImGui_InputText")(str(label), @ptrCast(buffer.ptr), buffer.len, f);
 }
+
+/// Edits `edit` with no limit, growing it as it's typed past its room. Doesn't allocate otherwise.
+pub fn inputTextGrow(label: [:0]const u8, edit: *EditText, gpa: std.mem.Allocator, options: InputTextOptions) bool {
+    // ImGui needs somewhere to write, even empty
+    edit.reserve(gpa, 1) catch return false;
+    if (options.tight) raw("ImGui_PushStyleVarY")(c.ImGuiStyleVar_FramePadding, 0);
+    defer if (options.tight) raw("ImGui_PopStyleVar")();
+    var grow: Grow = .{ .text = edit, .gpa = gpa };
+    const f = flags(c.ImGuiInputTextFlags, "ImGuiInputTextFlags_", options.flags) | c.ImGuiInputTextFlags_CallbackResize;
+    const changed = if (options.hint) |h|
+        raw("ImGui_InputTextWithHintEx")(str(label), str(h), @ptrCast(edit.buf.ptr), edit.buf.len, f, Grow.callback, &grow)
+    else
+        raw("ImGui_InputTextEx")(str(label), @ptrCast(edit.buf.ptr), edit.buf.len, f, Grow.callback, &grow);
+    if (changed) edit.sync();
+    return changed;
+}
+
+const Grow = struct {
+    text: *EditText,
+    gpa: std.mem.Allocator,
+
+    fn callback(data: [*c]c.ImGuiInputTextCallbackData) callconv(.c) c_int {
+        const d: *c.ImGuiInputTextCallbackData = data;
+        if (d.EventFlag != c.ImGuiInputTextFlags_CallbackResize) return 0;
+        const self: *Grow = @ptrCast(@alignCast(d.UserData));
+        // Out of memory it keeps its room, and ImGui cuts the text to fit
+        self.text.reserve(self.gpa, @intCast(d.BufSize)) catch {};
+        d.Buf = @ptrCast(self.text.buf.ptr);
+        d.BufSize = @intCast(self.text.buf.len);
+        return 0;
+    }
+};
 
 /// Enter adds a line. With `enter_returns_true`, Ctrl+Enter returns true.
 pub fn inputTextMultiline(label: [:0]const u8, buffer: []u8, size: Vec2, input_flags: InputTextFlags) bool {

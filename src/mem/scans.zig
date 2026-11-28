@@ -1,6 +1,7 @@
 //! Signature scan reporting, one recorder per DLL.
 
 const std = @import("std");
+const atomic = @import("tuft_arch").atomic;
 
 const pattern = @import("pattern.zig");
 const AddressSource = @import("originals.zig").AddressSource;
@@ -37,6 +38,42 @@ pub fn setRecorder(new: ?Recorder) ?Recorder {
 
 pub fn report(record: *const Record) void {
     if (recorder.load(.acquire)) |r| r(record);
+}
+
+/// Where a scan matched before, and in which copy.
+pub const Hit = struct {
+    at: usize,
+    source: AddressSource = .live,
+};
+
+/// Remembers where scans matched, so the next run checks that spot before scanning. Local memory only.
+pub const Cache = struct {
+    /// `pattern` as `format` gives it.
+    lookup: *const fn (start: usize, len: usize, pattern: []const u8, first_match: bool) ?Hit,
+    /// Null forgets it.
+    remember: *const fn (start: usize, len: usize, pattern: []const u8, first_match: bool, hit: ?Hit) void,
+};
+
+var cache: atomic.Value(?*const Cache) = .init(null);
+
+/// Returns the old cache. Thread-safe.
+pub fn setCache(new: ?*const Cache) ?*const Cache {
+    return cache.swap(new, .acq_rel);
+}
+
+pub fn cached(start: usize, len: usize, text: []const u8, first_match: bool) ?Hit {
+    const c = cache.load(.acquire) orelse return null;
+    return c.lookup(start, len, text, first_match);
+}
+
+pub fn remember(start: usize, len: usize, text: []const u8, first_match: bool, hit: ?Hit) void {
+    if (cache.load(.acquire)) |c| c.remember(start, len, text, first_match, hit);
+}
+
+/// Freed with `gpa.free`.
+pub fn formatAlloc(gpa: std.mem.Allocator, p: pattern.Pattern) error{OutOfMemory}![]u8 {
+    const buf = try gpa.alloc(u8, if (p.len == 0) 0 else p.len * 3 - 1);
+    return @constCast(format(p, buf));
 }
 
 /// Cut short if it doesn't fit.

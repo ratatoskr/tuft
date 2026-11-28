@@ -13,9 +13,9 @@ pub const Kind = enum(u8) { info, success, warning, @"error" };
 
 pub const Toast = struct {
     kind: Kind = .info,
-    /// Bold line on top, can be empty. Cut off past `max_title` bytes.
+    /// Bold line on top, can be empty.
     title: []const u8 = "",
-    /// Wrapped. Cut off past `max_text` bytes.
+    /// Wrapped.
     text: []const u8 = "",
     /// How long it stays up, not counting while hovered. 0 keeps it until it's clicked or dismissed.
     seconds: f32 = 4,
@@ -26,8 +26,6 @@ pub const Id = u32;
 
 /// Pushing more drops the oldest.
 pub const capacity = 8;
-pub const max_title = 64;
-pub const max_text = 256;
 
 pub const Corner = enum { top_left, top_right, bottom_left, bottom_right };
 
@@ -44,30 +42,43 @@ pub const Options = struct {
 const fade_in = 0.15;
 const fade_out = 0.4;
 
+/// Each keeps its buffers for the next toast in it, so updating one every frame doesn't allocate.
 const Slot = struct {
-    id: Id,
-    kind: Kind,
-    seconds: f32,
+    id: Id = 0,
+    kind: Kind = .info,
+    seconds: f32 = 0,
     age: f32 = 0,
     closing: bool = false,
-    title_len: u8 = 0,
-    text_len: u16 = 0,
-    title_buf: [max_title]u8 = undefined,
-    text_buf: [max_text]u8 = undefined,
+    title_buf: std.ArrayList(u8) = .empty,
+    text_buf: std.ArrayList(u8) = .empty,
 
-    fn set(self: *Slot, toast: Toast) void {
+    fn set(self: *Slot, gpa: std.mem.Allocator, toast: Toast) void {
         self.kind = toast.kind;
         self.seconds = @max(toast.seconds, 0);
-        self.title_len = @intCast(fit(&self.title_buf, toast.title));
-        self.text_len = @intCast(fit(&self.text_buf, toast.text));
+        keep(&self.title_buf, gpa, toast.title);
+        keep(&self.text_buf, gpa, toast.text);
+    }
+
+    /// Grows only past the longest yet. Out of memory, it keeps what fits.
+    fn keep(buf: *std.ArrayList(u8), gpa: std.mem.Allocator, src: []const u8) void {
+        buf.clearRetainingCapacity();
+        buf.ensureTotalCapacity(gpa, src.len) catch {};
+        buf.appendSliceAssumeCapacity(src[0..fit(buf.allocatedSlice(), src)]);
+    }
+
+    /// Starts over in this slot, keeping its buffers.
+    fn reuse(self: *Slot, id: Id) void {
+        self.id = id;
+        self.age = 0;
+        self.closing = false;
     }
 
     fn title(self: *const Slot) []const u8 {
-        return self.title_buf[0..self.title_len];
+        return self.title_buf.items;
     }
 
     fn text(self: *const Slot) []const u8 {
-        return self.text_buf[0..self.text_len];
+        return self.text_buf.items;
     }
 
     fn alpha(self: *const Slot) f32 {
@@ -87,27 +98,38 @@ const Slot = struct {
     }
 };
 
+/// For the slots' text.
+allocator: std.mem.Allocator = std.heap.smp_allocator,
 locked: atomic.Value(bool) = .init(false),
-/// Oldest first.
-slots: [capacity]Slot = undefined,
+/// Oldest first, the first `len` showing.
+slots: [capacity]Slot = @splat(.{}),
 len: u8 = 0,
 last_id: Id = 0,
 /// Draw thread only.
 viewport: c.ImGuiID = 0,
+
+pub fn deinit(self: *Toasts) void {
+    for (&self.slots) |*slot| {
+        slot.title_buf.deinit(self.allocator);
+        slot.text_buf.deinit(self.allocator);
+    }
+    self.* = undefined;
+}
 
 /// Any thread.
 pub fn push(self: *Toasts, toast: Toast) Id {
     self.lock();
     defer self.unlock();
     if (self.len == capacity) {
-        std.mem.copyForwards(Slot, self.slots[0 .. capacity - 1], self.slots[1..]);
+        // The oldest's slot goes last, for this one
+        std.mem.rotate(Slot, &self.slots, 1);
         self.len -= 1;
     }
     self.last_id +%= 1;
     if (self.last_id == 0) self.last_id = 1;
     const slot = &self.slots[self.len];
-    slot.* = .{ .id = self.last_id, .kind = toast.kind, .seconds = 0 };
-    slot.set(toast);
+    slot.reuse(self.last_id);
+    slot.set(self.allocator, toast);
     self.len += 1;
     return self.last_id;
 }
@@ -117,7 +139,7 @@ pub fn update(self: *Toasts, id: Id, toast: Toast) bool {
     self.lock();
     defer self.unlock();
     const slot = self.find(id) orelse return false;
-    slot.set(toast);
+    slot.set(self.allocator, toast);
     slot.closing = false;
     slot.age = @min(slot.age, fade_in);
     return true;
@@ -188,10 +210,11 @@ pub fn draw(self: *Toasts, options: Options) void {
         y += if (bottom) -(size.y + gap) else size.y + gap;
     }
 
+    // Swapped, not copied, so each slot keeps its own buffers
     var kept: u8 = 0;
-    for (self.slots[0..self.len]) |slot| {
-        if (slot.expired()) continue;
-        self.slots[kept] = slot;
+    for (0..self.len) |j| {
+        if (self.slots[j].expired()) continue;
+        std.mem.swap(Slot, &self.slots[kept], &self.slots[j]);
         kept += 1;
     }
     self.len = kept;
@@ -203,14 +226,14 @@ const window_flags = c.ImGuiWindowFlags_NoDecoration | c.ImGuiWindowFlags_NoSave
 
 fn drawSlot(_: *Toasts, slot: *const Slot) void {
     const color = kindColor(slot.kind);
-    if (slot.title_len > 0) {
+    if (slot.title().len > 0) {
         const b = root.bold();
         defer b.end();
         const coloured = root.withColor(c.ImGuiCol_Text, color);
         defer coloured.end();
         textOf(slot.title());
     }
-    if (slot.text_len > 0) {
+    if (slot.text().len > 0) {
         raw("ImGui_PushTextWrapPos")(0);
         textOf(slot.text());
         raw("ImGui_PopTextWrapPos")();
@@ -294,9 +317,23 @@ test fit {
 }
 
 test "push drops the oldest when full" {
-    var toasts: Toasts = .{};
+    var toasts: Toasts = .{ .allocator = std.testing.allocator };
+    defer toasts.deinit();
     const first = toasts.push(.{ .text = "first" });
     for (0..capacity) |_| _ = toasts.push(.{});
     try std.testing.expectEqual(capacity, toasts.count());
     try std.testing.expect(!toasts.update(first, .{}));
+}
+
+test "text of any length, and updating doesn't allocate once it's grown" {
+    var toasts: Toasts = .{ .allocator = std.testing.allocator };
+    defer toasts.deinit();
+    const long: [1000]u8 = @splat('x');
+    const id = toasts.push(.{ .title = &long, .text = &long });
+    try std.testing.expectEqual(long.len, toasts.slots[0].text().len);
+    try std.testing.expectEqual(long.len, toasts.slots[0].title().len);
+    const before = toasts.slots[0].text_buf.items.ptr;
+    try std.testing.expect(toasts.update(id, .{ .text = "50%" }));
+    try std.testing.expect(toasts.update(id, .{ .text = &long }));
+    try std.testing.expectEqual(before, toasts.slots[0].text_buf.items.ptr);
 }
